@@ -1,0 +1,29 @@
+name: Hermes Scheduled Maintenance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  hermes-maintenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Hermes
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: ./
+        with:
+          prompt: |
+            Inspect this repository for stale dependencies or obvious maintenance issues.
+            If you make safe changes, commit and push them to the current branch.
+          github_token: ${{ secrets.GITHUB_TOKEN }}

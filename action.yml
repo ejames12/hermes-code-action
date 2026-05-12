@@ -1,0 +1,223 @@
+name: Hermes Code Action
+description: "Run Hermes Agent from @hermes GitHub mentions and workflow prompts"
+author: "Hermes Agent contributors"
+
+branding:
+  icon: "terminal"
+  color: "purple"
+
+inputs:
+  trigger_phrase:
+    description: "Phrase that triggers tag mode from issue/PR comments."
+    required: false
+    default: "@hermes"
+  assignee_trigger:
+    description: "Optional assignee username that triggers tag mode on issue assignment."
+    required: false
+    default: ""
+  label_trigger:
+    description: "Optional label name that triggers tag mode on issue labeling."
+    required: false
+    default: "hermes"
+  track_progress:
+    description: "Run tag mode on supported pull_request lifecycle events even without a fresh mention."
+    required: false
+    default: "false"
+  prompt:
+    description: "Explicit prompt for agent mode. When set, @mention detection is skipped."
+    required: false
+    default: ""
+  base_branch:
+    description: "Base branch for new Hermes branches. Defaults to repository default branch."
+    required: false
+    default: ""
+  branch_prefix:
+    description: "Prefix for branches created from issues or fork PRs."
+    required: false
+    default: "hermes/"
+  branch_name_template:
+    description: "Optional branch template using {{prefix}}, {{entityType}}, {{entityNumber}}, {{timestamp}}, {{sha}}, {{label}}, {{description}}."
+    required: false
+    default: ""
+  include_comments_by_actor:
+    description: "Comma-separated actor allowlist for comments included in prompt context. Supports * suffix/prefix."
+    required: false
+    default: ""
+  exclude_comments_by_actor:
+    description: "Comma-separated actor denylist for comments included in prompt context. Supports * suffix/prefix."
+    required: false
+    default: ""
+  allowed_bots:
+    description: "Comma-separated bot actors allowed to trigger Hermes. Bots are denied by default."
+    required: false
+    default: ""
+  allowed_non_write_users:
+    description: "Comma-separated non-writer actors allowed to trigger Hermes. Disabled by default and unsafe for public repos."
+    required: false
+    default: ""
+  github_token:
+    description: "GitHub token used for comments, metadata, and git push. Defaults to github.token/GITHUB_TOKEN."
+    required: false
+    default: "${{ github.token }}"
+  use_sticky_comment:
+    description: "Reserved compatibility input. Future versions may reuse existing Hermes comments."
+    required: false
+    default: "false"
+  bot_id:
+    description: "Git commit bot numeric id."
+    required: false
+    default: "41898282"
+  bot_name:
+    description: "Git commit bot name."
+    required: false
+    default: "github-actions[bot]"
+  display_report:
+    description: "Write a GitHub step summary."
+    required: false
+    default: "true"
+  show_full_output:
+    description: "Show full Hermes stdout/stderr in logs and final comment. Defaults to false."
+    required: false
+    default: "false"
+  install_hermes:
+    description: "If true, run hermes_install_command when no Hermes executable is found."
+    required: false
+    default: "false"
+  hermes_install_command:
+    description: "Shell command used when install_hermes is true and Hermes is missing. Pin this in production."
+    required: false
+    default: "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash"
+  path_to_hermes_executable:
+    description: "Path to Hermes executable. Defaults to hermes on PATH."
+    required: false
+    default: ""
+  hermes_args:
+    description: "Additional shell-style arguments appended to hermes chat."
+    required: false
+    default: ""
+  hermes_toolsets:
+    description: "Comma-separated Hermes toolsets."
+    required: false
+    default: "file,terminal,web"
+  hermes_model:
+    description: "Optional Hermes model override."
+    required: false
+    default: ""
+  hermes_provider:
+    description: "Optional Hermes provider override."
+    required: false
+    default: ""
+  hermes_max_turns:
+    description: "Maximum Hermes tool-calling turns."
+    required: false
+    default: "90"
+  hermes_yolo:
+    description: "Pass --yolo to Hermes so non-interactive CI can run commands. Restrict triggers to trusted actors."
+    required: false
+    default: "true"
+  hermes_source:
+    description: "Hermes session source tag."
+    required: false
+    default: "github-action"
+  timeout_seconds:
+    description: "Maximum seconds to allow Hermes to run."
+    required: false
+    default: "1800"
+  max_prompt_chars:
+    description: "Maximum prompt length after GitHub context collection."
+    required: false
+    default: "180000"
+  dry_run:
+    description: "Build prompt/comments but skip Hermes execution. Useful for tests."
+    required: false
+    default: "false"
+
+outputs:
+  execution_file:
+    description: "Path to JSON execution output written by this action."
+    value: ${{ steps.run.outputs.execution_file }}
+  branch_name:
+    description: "Branch checked out or created for Hermes work."
+    value: ${{ steps.run.outputs.branch_name }}
+  github_token:
+    description: "GitHub token available to the action. Mirrors Claude Code Action compatibility output."
+    value: ${{ steps.run.outputs.github_token }}
+  structured_output:
+    description: "Reserved for future structured Hermes output."
+    value: ${{ steps.run.outputs.structured_output }}
+  session_id:
+    description: "Hermes session id if detected from CLI output."
+    value: ${{ steps.run.outputs.session_id }}
+  conclusion:
+    description: "success, failure, or skipped."
+    value: ${{ steps.run.outputs.conclusion }}
+  hermes_comment_id:
+    description: "Tracking comment id created by tag mode."
+    value: ${{ steps.run.outputs.hermes_comment_id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Locate or install Hermes
+      shell: bash
+      env:
+        INPUT_INSTALL_HERMES: ${{ inputs.install_hermes }}
+        INPUT_HERMES_INSTALL_COMMAND: ${{ inputs.hermes_install_command }}
+        INPUT_PATH_TO_HERMES_EXECUTABLE: ${{ inputs.path_to_hermes_executable }}
+      run: |
+        set -euo pipefail
+        if [ -n "${INPUT_PATH_TO_HERMES_EXECUTABLE}" ] && [ -x "${INPUT_PATH_TO_HERMES_EXECUTABLE}" ]; then
+          echo "Using Hermes executable at ${INPUT_PATH_TO_HERMES_EXECUTABLE}"
+          exit 0
+        fi
+        if command -v hermes >/dev/null 2>&1; then
+          hermes --version || true
+          exit 0
+        fi
+        if [ "${INPUT_INSTALL_HERMES}" = "true" ]; then
+          echo "Hermes not found; running hermes_install_command"
+          bash -lc "${INPUT_HERMES_INSTALL_COMMAND}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        else
+          echo "::error::Hermes executable not found. Install Hermes in an earlier step, set install_hermes: true, or set path_to_hermes_executable."
+          exit 1
+        fi
+
+    - id: run
+      name: Run Hermes Code Action
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}/src
+        INPUT_TRIGGER_PHRASE: ${{ inputs.trigger_phrase }}
+        INPUT_ASSIGNEE_TRIGGER: ${{ inputs.assignee_trigger }}
+        INPUT_LABEL_TRIGGER: ${{ inputs.label_trigger }}
+        INPUT_TRACK_PROGRESS: ${{ inputs.track_progress }}
+        INPUT_PROMPT: ${{ inputs.prompt }}
+        INPUT_BASE_BRANCH: ${{ inputs.base_branch }}
+        INPUT_BRANCH_PREFIX: ${{ inputs.branch_prefix }}
+        INPUT_BRANCH_NAME_TEMPLATE: ${{ inputs.branch_name_template }}
+        INPUT_INCLUDE_COMMENTS_BY_ACTOR: ${{ inputs.include_comments_by_actor }}
+        INPUT_EXCLUDE_COMMENTS_BY_ACTOR: ${{ inputs.exclude_comments_by_actor }}
+        INPUT_ALLOWED_BOTS: ${{ inputs.allowed_bots }}
+        INPUT_ALLOWED_NON_WRITE_USERS: ${{ inputs.allowed_non_write_users }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        INPUT_USE_STICKY_COMMENT: ${{ inputs.use_sticky_comment }}
+        INPUT_BOT_ID: ${{ inputs.bot_id }}
+        INPUT_BOT_NAME: ${{ inputs.bot_name }}
+        INPUT_DISPLAY_REPORT: ${{ inputs.display_report }}
+        INPUT_SHOW_FULL_OUTPUT: ${{ inputs.show_full_output }}
+        INPUT_PATH_TO_HERMES_EXECUTABLE: ${{ inputs.path_to_hermes_executable }}
+        INPUT_HERMES_ARGS: ${{ inputs.hermes_args }}
+        INPUT_HERMES_TOOLSETS: ${{ inputs.hermes_toolsets }}
+        INPUT_HERMES_MODEL: ${{ inputs.hermes_model }}
+        INPUT_HERMES_PROVIDER: ${{ inputs.hermes_provider }}
+        INPUT_HERMES_MAX_TURNS: ${{ inputs.hermes_max_turns }}
+        INPUT_HERMES_YOLO: ${{ inputs.hermes_yolo }}
+        INPUT_HERMES_SOURCE: ${{ inputs.hermes_source }}
+        INPUT_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+        INPUT_MAX_PROMPT_CHARS: ${{ inputs.max_prompt_chars }}
+        INPUT_DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+        python3 -m hermes_code_action

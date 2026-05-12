@@ -1,0 +1,16 @@
+[project]
+name = "hermes-code-action"
+version = "0.1.0"
+description = "GitHub Action that runs Hermes Agent from @hermes mentions"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Hermes Agent contributors" }]
+
+[tool.pyright]
+pythonVersion = "3.11"
+include = ["src", "tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

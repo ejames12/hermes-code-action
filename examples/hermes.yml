@@ -1,0 +1,41 @@
+name: Hermes
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, edited, assigned, labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  hermes:
+    if: |
+      github.event_name != 'issue_comment' ||
+      contains(github.event.comment.body, '@hermes')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Recommended: install Hermes yourself and pin this command/version for production.
+      # Replace with your organization's approved Hermes installation method.
+      - name: Install Hermes
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - uses: ./
+        with:
+          trigger_phrase: "@hermes"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          hermes_toolsets: "file,terminal,web"
