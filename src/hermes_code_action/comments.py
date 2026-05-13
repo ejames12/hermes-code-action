@@ -68,19 +68,14 @@ def final_comment_body(
     if plan_url:
         links.append(f"[View plan]({plan_url})")
     link_line = " • ".join(links)
-    body = f"""## {icon} Hermes {status} @{ctx.actor}'s task in {_duration(started_at)}
+    body = f"""## {icon} Hermes {status} in {_duration(started_at)}
 
-{link_line}
-
-- [x] Trigger received
-- [x] Repository context collected
-- [x] Hermes execution completed
-- [x] Final result posted
+@{ctx.actor} — run complete. {link_line}
 """
     if push_message:
-        body += f"- {push_message}\n"
+        body += f"\n{push_message}\n"
     body += """
-### Hermes result
+### Summary
 
 """
     if output:

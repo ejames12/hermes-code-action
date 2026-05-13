@@ -33,6 +33,8 @@ class CommentTests(unittest.TestCase):
             push_message="Pushed branch hermes/issue-1 for PR review.",
         )
         self.assertIn("Hermes finished", final)
+        self.assertIn("### Summary", final)
+        self.assertNotIn("Final result posted", final)
         self.assertIn("Create PR", final)
         self.assertIn("View plan", final)
         self.assertIn("Pushed branch", final)

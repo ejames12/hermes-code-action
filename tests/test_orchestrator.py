@@ -9,7 +9,7 @@ from unittest import mock
 from tests import _paths  # noqa: F401
 from hermes_code_action.config import Inputs
 from hermes_code_action.hermes_runner import HermesResult
-from hermes_code_action.orchestrator import _build_stage_prompt, _stage_inputs, run_staged
+from hermes_code_action.orchestrator import _build_stage_prompt, _compact_stage_summary, _stage_inputs, run_staged
 from hermes_code_action.policy import OrchestrationPolicy, StagePolicy
 
 
@@ -108,8 +108,10 @@ class RunStagedTests(unittest.TestCase):
                     final = run_staged("base prompt", Inputs(dry_run=True), policy)
         self.assertEqual(mocked.call_count, 4)
         self.assertTrue(final.success)
-        self.assertIn("plan", final.stdout)
-        self.assertIn("adjudicate", final.stdout)
+        self.assertIn("### Stage summaries", final.stdout)
+        self.assertIn("**plan**", final.stdout)
+        self.assertIn("**adjudicate**", final.stdout)
+        self.assertNotIn("## Stage:", final.stdout)
 
     def test_stops_on_first_failure(self) -> None:
         policy = self._policy("plan", "implement", "review", "adjudicate")
@@ -192,6 +194,13 @@ class RunStagedTests(unittest.TestCase):
                 with mock.patch("hermes_code_action.orchestrator.run_hermes", return_value=result):
                     final = run_staged("prompt", Inputs(dry_run=True), policy)
         self.assertEqual(final.session_id, "abc123")
+
+    def test_stage_comment_summary_is_compact_and_single_line(self) -> None:
+        verbose = "# Result\n\n" + "details with | pipes\n" * 200
+        summary = _compact_stage_summary(_success_result(verbose))
+        self.assertLessEqual(len(summary), 720)
+        self.assertNotIn("\n", summary)
+        self.assertIn("\\|", summary)
 
 
 if __name__ == "__main__":

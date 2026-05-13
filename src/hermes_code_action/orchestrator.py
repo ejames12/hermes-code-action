@@ -35,6 +35,7 @@ _STAGE_PREAMBLES = {
 
 _PRIOR_OUTPUT_HEADER = "\n\n---\n## Prior stage outputs\n\n"
 _PRIOR_STAGE_LIMIT = 8_000
+_STAGE_COMMENT_SUMMARY_LIMIT = 700
 
 
 def _build_stage_prompt(base_prompt: str, stage: StagePolicy, prior_outputs: dict[str, str]) -> str:
@@ -116,6 +117,18 @@ def _fail_read_only_stage(stage: StagePolicy, result: HermesResult) -> HermesRes
     )
 
 
+def _compact_stage_summary(result: HermesResult) -> str:
+    """Return a short, GitHub-comment-friendly summary for one stage."""
+    text = (result.stdout or result.stderr or "").strip()
+    if not text:
+        return "No stage output."
+    # Collapse markdown/code-heavy agent output into one readable sentence so the final
+    # GitHub issue comment stays compact and does not break formatting.
+    text = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    text = text.replace("|", "\\|")
+    return truncate(text, _STAGE_COMMENT_SUMMARY_LIMIT, marker=" …[truncated]")
+
+
 def _write_staged_execution_file(stage_results: list[tuple[str, HermesResult]], overall_conclusion: str) -> str:
     runner_temp = Path(os.environ.get("RUNNER_TEMP") or "/tmp")
     runner_temp.mkdir(parents=True, exist_ok=True)
@@ -178,15 +191,20 @@ def run_staged(
     overall_conclusion = "failure" if failed else "success"
     execution_file = _write_staged_execution_file(stage_results, overall_conclusion)
 
-    # Build aggregated stdout/stderr for comment rendering
-    summaries: list[str] = []
+    # Build a compact, comment-friendly summary. Full per-stage stdout/stderr is still
+    # preserved in the execution JSON and GitHub Actions logs.
+    lines = ["### Stage summaries", ""]
     for stage_name, r in stage_results:
-        out = (r.stdout or r.stderr).strip()
-        summaries.append(f"## Stage: {stage_name}\n\n{truncate(out, 4_000)}")
-    aggregated_stdout = "\n\n".join(summaries)
+        icon = "✅" if r.success else "❌"
+        duration = f"{r.duration_seconds:.1f}s"
+        summary = _compact_stage_summary(r)
+        lines.append(f"- **{stage_name}** {icon} `{r.conclusion}` ({duration}): {summary}")
 
     if failed:
-        aggregated_stdout += f"\n\n**Staged orchestration stopped at stage `{failed_stage}`.**"
+        lines.append("")
+        lines.append(f"**Staged orchestration stopped at stage `{failed_stage}`.**")
+
+    aggregated_stdout = "\n".join(lines)
 
     last_session_id = None
     for _, r in reversed(stage_results):
