@@ -53,6 +53,9 @@ class Inputs:
     hermes_toolsets: str = "file,terminal,web"
     hermes_model: str = ""
     hermes_provider: str = ""
+    hermes_fallback_model: str = ""
+    hermes_fallback_provider: str = ""
+    hermes_fallback_args: str = ""
     hermes_max_turns: str = "90"
     hermes_yolo: bool = True
     hermes_source: str = "github-action"
@@ -121,6 +124,9 @@ def load_inputs() -> Inputs:
         hermes_toolsets=env("INPUT_HERMES_TOOLSETS", "file,terminal,web") or "file,terminal,web",
         hermes_model=env("INPUT_HERMES_MODEL"),
         hermes_provider=env("INPUT_HERMES_PROVIDER"),
+        hermes_fallback_model=env("INPUT_HERMES_FALLBACK_MODEL"),
+        hermes_fallback_provider=env("INPUT_HERMES_FALLBACK_PROVIDER"),
+        hermes_fallback_args=env("INPUT_HERMES_FALLBACK_ARGS"),
         hermes_max_turns=env("INPUT_HERMES_MAX_TURNS", "90") or "90",
         hermes_yolo=parse_bool(env("INPUT_HERMES_YOLO"), True),
         hermes_source=env("INPUT_HERMES_SOURCE", "github-action") or "github-action",

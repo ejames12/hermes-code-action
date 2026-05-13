@@ -155,6 +155,8 @@ workflows:
 
 Policy files may be JSON or YAML. YAML support uses PyYAML when available; JSON works with the Python stdlib. If `orchestration_mode: staged` is set and no policy file is provided/found, the action uses a safe built-in four-stage default with the normal `hermes_provider`, `hermes_model`, `hermes_toolsets`, and `hermes_max_turns` as fallbacks.
 
+When a staged phase that normally delegates to Claude Code CLI fails with output that looks like Claude/Anthropic throttling (`rate limit`, `429`, `too many requests`, `overloaded`, etc.), the action can retry that phase once with a secondary Hermes model. Configure `hermes_fallback_provider` and/or `hermes_fallback_model`; fallback retries intentionally do not load `hermes_args: -s claude-code` unless you explicitly set `hermes_fallback_args`.
+
 For the Opus → Sonnet → GPT → Sonnet pattern: put Opus on `planner`, Sonnet on `implementer`, GPT on `reviewer`, and Sonnet on `adjudicator` with `must_consider: [reviewer]`. The adjudicator prompt requires triaging GPT's findings; the wrapper validates tests/branch rules and humans still approve merges.
 
 ## Agent mode
@@ -181,6 +183,9 @@ Use an explicit prompt when you do not want mention detection:
 | `hermes_toolsets` | `file,terminal,web` | Toolsets passed to `hermes chat`. |
 | `hermes_model` | empty | Optional model override. |
 | `hermes_provider` | empty | Optional provider override. |
+| `hermes_fallback_model` | empty | Secondary Hermes model for staged-phase retries when Claude Code CLI appears throttled. |
+| `hermes_fallback_provider` | empty | Secondary Hermes provider for fallback retries. |
+| `hermes_fallback_args` | empty | Optional args for fallback retries. Leave empty to avoid loading `claude-code` on fallback. |
 | `hermes_yolo` | `true` | Passes `--yolo` for non-interactive CI execution. Use only with trusted triggers. |
 | `orchestration_mode` | `single` | Set to `staged` for planner/implementer/reviewer/adjudicator runs. |
 | `orchestration_policy` | empty | Optional `.json`/`.yml` policy file path for staged mode. |

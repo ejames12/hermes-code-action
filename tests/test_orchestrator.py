@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import tempfile
@@ -9,7 +10,14 @@ from unittest import mock
 from tests import _paths  # noqa: F401
 from hermes_code_action.config import Inputs
 from hermes_code_action.hermes_runner import HermesResult
-from hermes_code_action.orchestrator import _build_stage_prompt, _compact_stage_summary, _stage_inputs, run_staged
+from hermes_code_action.orchestrator import (
+    _build_stage_prompt,
+    _compact_stage_summary,
+    _fallback_stage_inputs,
+    _looks_like_claude_throttle,
+    _stage_inputs,
+    run_staged,
+)
 from hermes_code_action.policy import OrchestrationPolicy, StagePolicy
 
 
@@ -93,6 +101,26 @@ class StageInputsTests(unittest.TestCase):
         self.assertEqual(result.hermes_toolsets, "file")
         self.assertEqual(result.hermes_max_turns, "10")
 
+    def test_fallback_inputs_use_secondary_model_and_drop_claude_skill(self) -> None:
+        base = Inputs(
+            hermes_provider="openai-codex",
+            hermes_model="primary",
+            hermes_args="-s claude-code",
+            hermes_fallback_provider="openrouter",
+            hermes_fallback_model="deepseek-ai/DeepSeek-V4-Pro",
+        )
+        stage_inputs = dataclasses.replace(base, hermes_provider="anthropic", hermes_model="sonnet")
+        fallback = _fallback_stage_inputs(base, stage_inputs)
+        self.assertIsNotNone(fallback)
+        assert fallback is not None
+        self.assertEqual(fallback.hermes_provider, "openrouter")
+        self.assertEqual(fallback.hermes_model, "deepseek-ai/DeepSeek-V4-Pro")
+        self.assertEqual(fallback.hermes_args, "")
+
+    def test_claude_throttle_detection(self) -> None:
+        self.assertTrue(_looks_like_claude_throttle(_failure_result(stderr="Claude Code API rate limit 429")))
+        self.assertFalse(_looks_like_claude_throttle(_failure_result(stderr="unit tests failed")))
+
 
 class RunStagedTests(unittest.TestCase):
     def _policy(self, *modes: str) -> OrchestrationPolicy:
@@ -127,6 +155,32 @@ class RunStagedTests(unittest.TestCase):
         self.assertFalse(final.success)
         self.assertEqual(final.conclusion, "failure")
         self.assertIn("implement", final.stdout)
+
+    def test_retries_claude_throttle_with_secondary_hermes_model(self) -> None:
+        policy = self._policy("plan", "implement")
+        side_effects = [
+            _success_result("plan done"),
+            _failure_result(stderr="Claude Code failed: rate limit 429"),
+            _success_result("fallback implement done"),
+        ]
+        inputs = Inputs(
+            dry_run=True,
+            hermes_args="-s claude-code",
+            hermes_fallback_provider="openrouter",
+            hermes_fallback_model="deepseek-ai/DeepSeek-V4-Pro",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", side_effect=side_effects) as mocked:
+                    final = run_staged("base prompt", inputs, policy)
+        self.assertEqual(mocked.call_count, 3)
+        fallback_inputs = mocked.call_args_list[2].args[1]
+        self.assertEqual(fallback_inputs.hermes_provider, "openrouter")
+        self.assertEqual(fallback_inputs.hermes_model, "deepseek-ai/DeepSeek-V4-Pro")
+        self.assertEqual(fallback_inputs.hermes_args, "")
+        self.assertTrue(final.success)
+        self.assertIn("Retried with secondary Hermes model", final.stdout)
+        self.assertIn("fallback implement done", final.stdout)
 
     def test_review_stage_fails_if_it_changes_git_state(self) -> None:
         policy = OrchestrationPolicy(stages=[StagePolicy(name="reviewer", mode="review")])

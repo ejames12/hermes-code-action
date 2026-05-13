@@ -36,6 +36,18 @@ _STAGE_PREAMBLES = {
 _PRIOR_OUTPUT_HEADER = "\n\n---\n## Prior stage outputs\n\n"
 _PRIOR_STAGE_LIMIT = 8_000
 _STAGE_COMMENT_SUMMARY_LIMIT = 700
+_CLAUDE_THROTTLE_MARKERS = (
+    "rate limit",
+    "rate_limit",
+    "rate limited",
+    "too many requests",
+    "429",
+    "throttl",
+    "overloaded",
+    "capacity",
+    "api_retry",
+    "quota exceeded",
+)
 
 
 def _build_stage_prompt(base_prompt: str, stage: StagePolicy, prior_outputs: dict[str, str]) -> str:
@@ -71,6 +83,60 @@ def _stage_inputs(base_inputs: Inputs, stage: StagePolicy) -> Inputs:
     if not overrides:
         return base_inputs
     return dataclasses.replace(base_inputs, **overrides)
+
+
+def _fallback_stage_inputs(base_inputs: Inputs, stage_inputs: Inputs) -> Inputs | None:
+    """Return Inputs for a secondary Hermes retry, or None if not configured."""
+    if not (base_inputs.hermes_fallback_provider or base_inputs.hermes_fallback_model):
+        return None
+    return dataclasses.replace(
+        stage_inputs,
+        hermes_provider=base_inputs.hermes_fallback_provider,
+        hermes_model=base_inputs.hermes_fallback_model,
+        # Intentionally do not carry `-s claude-code` into fallback by default.
+        hermes_args=base_inputs.hermes_fallback_args,
+    )
+
+
+def _looks_like_claude_throttle(result: HermesResult) -> bool:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    if "claude" not in text and "anthropic" not in text:
+        return False
+    return any(marker in text for marker in _CLAUDE_THROTTLE_MARKERS)
+
+
+def _build_fallback_prompt(stage_prompt: str, failed_result: HermesResult) -> str:
+    failure_summary = truncate((failed_result.stderr or failed_result.stdout or "").strip(), 4_000)
+    return f"""{stage_prompt}
+
+---
+## Secondary Hermes fallback
+
+The previous attempt for this stage appears to have failed because Claude Code CLI was throttled/rate-limited. Retry this stage using Hermes's configured secondary provider/model.
+
+Do NOT invoke Claude Code CLI, `claude`, or the `claude-code` skill during this fallback attempt. Use Hermes's own model and available tools directly. Preserve the same stage role, safety constraints, git restrictions, and output expectations.
+
+Previous failure summary:
+{failure_summary or '(no failure details captured)'}
+"""
+
+
+def _fallback_result(primary: HermesResult, fallback: HermesResult) -> HermesResult:
+    stdout = (
+        (primary.stdout or primary.stderr).strip()
+        + "\n\n---\nRetried with secondary Hermes model after Claude Code throttling.\n\n"
+        + fallback.stdout.strip()
+    ).strip()
+    stderr = fallback.stderr
+    return HermesResult(
+        conclusion=fallback.conclusion,
+        stdout=stdout,
+        stderr=stderr,
+        returncode=fallback.returncode,
+        execution_file=fallback.execution_file,
+        duration_seconds=primary.duration_seconds + fallback.duration_seconds,
+        session_id=fallback.session_id or primary.session_id,
+    )
 
 
 def _git_state() -> tuple[str, str] | None:
@@ -172,6 +238,15 @@ def run_staged(
         stage_inputs = _stage_inputs(inputs, stage)
         read_only_before = _git_state() if stage.mode in {"review", "adjudicate"} else None
         result = run_hermes(stage_prompt, stage_inputs, extra_env=extra_env)
+        fallback_inputs = _fallback_stage_inputs(inputs, stage_inputs)
+        if not result.success and fallback_inputs is not None and _looks_like_claude_throttle(result):
+            notice(
+                f"[orchestrator] Stage {stage.name!r} appears Claude-throttled; "
+                "retrying with secondary Hermes model."
+            )
+            fallback_prompt = _build_fallback_prompt(stage_prompt, result)
+            fallback = run_hermes(fallback_prompt, fallback_inputs, extra_env=extra_env)
+            result = _fallback_result(result, fallback)
         if read_only_before is not None and result.success:
             read_only_after = _git_state()
             if read_only_after is not None and read_only_after != read_only_before:

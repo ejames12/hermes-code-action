@@ -107,6 +107,18 @@ inputs:
     description: "Optional Hermes provider override."
     required: false
     default: ""
+  hermes_fallback_model:
+    description: "Optional secondary Hermes model used to retry a staged phase when Claude Code CLI appears throttled/rate-limited."
+    required: false
+    default: ""
+  hermes_fallback_provider:
+    description: "Optional secondary Hermes provider used with hermes_fallback_model."
+    required: false
+    default: ""
+  hermes_fallback_args:
+    description: "Optional Hermes args for fallback retries. Defaults to empty so Claude Code skill is not loaded on fallback."
+    required: false
+    default: ""
   hermes_max_turns:
     description: "Maximum Hermes tool-calling turns."
     required: false
@@ -233,6 +245,9 @@ runs:
         INPUT_HERMES_TOOLSETS: ${{ inputs.hermes_toolsets }}
         INPUT_HERMES_MODEL: ${{ inputs.hermes_model }}
         INPUT_HERMES_PROVIDER: ${{ inputs.hermes_provider }}
+        INPUT_HERMES_FALLBACK_MODEL: ${{ inputs.hermes_fallback_model }}
+        INPUT_HERMES_FALLBACK_PROVIDER: ${{ inputs.hermes_fallback_provider }}
+        INPUT_HERMES_FALLBACK_ARGS: ${{ inputs.hermes_fallback_args }}
         INPUT_HERMES_MAX_TURNS: ${{ inputs.hermes_max_turns }}
         INPUT_HERMES_YOLO: ${{ inputs.hermes_yolo }}
         INPUT_HERMES_SOURCE: ${{ inputs.hermes_source }}
