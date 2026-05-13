@@ -29,9 +29,13 @@ class CommentTests(unittest.TestCase):
             branch_url="https://branch",
             compare_url="https://compare",
             output="done",
+            plan_url="https://plan",
+            push_message="Pushed branch hermes/issue-1 for PR review.",
         )
         self.assertIn("Hermes finished", final)
         self.assertIn("Create PR", final)
+        self.assertIn("View plan", final)
+        self.assertIn("Pushed branch", final)
         self.assertIn("done", final)
 
 

@@ -59,6 +59,9 @@ class Inputs:
     timeout_seconds: int = 1800
     max_prompt_chars: int = 180_000
     dry_run: bool = False
+    orchestration_mode: str = "single"
+    orchestration_policy: str = ""
+    workflow: str = "default"
 
     @property
     def allowed_bot_list(self) -> list[str]:
@@ -124,6 +127,9 @@ def load_inputs() -> Inputs:
         timeout_seconds=timeout_seconds,
         max_prompt_chars=max_prompt_chars,
         dry_run=parse_bool(env("INPUT_DRY_RUN"), False),
+        orchestration_mode=env("INPUT_ORCHESTRATION_MODE", "single") or "single",
+        orchestration_policy=env("INPUT_ORCHESTRATION_POLICY"),
+        workflow=env("INPUT_WORKFLOW", "default") or "default",
     )
 
 

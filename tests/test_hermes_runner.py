@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -39,9 +41,42 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertTrue(os.path.exists(result.execution_file))
 
-    def _tmpdir(self) -> str:
-        import tempfile
+    def test_run_hermes_passes_tracking_env_but_scrubs_tokens_and_github_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = Path(tmp, "fake-hermes")
+            executable.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "print('TOKEN=' + str('GITHUB_TOKEN' in os.environ))\n"
+                "print('INPUT_TOKEN=' + str('INPUT_GITHUB_TOKEN' in os.environ))\n"
+                "print('OUTPUT=' + str('GITHUB_OUTPUT' in os.environ))\n"
+                "print('TRACKING=' + os.environ.get('HERMES_TRACKING_COMMENT_ENDPOINT', ''))\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o700)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "RUNNER_TEMP": tmp,
+                    "INPUT_GITHUB_TOKEN": "secret",
+                    "GITHUB_TOKEN": "secret",
+                    "GITHUB_OUTPUT": str(Path(tmp, "outputs")),
+                    "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token",
+                },
+                clear=False,
+            ):
+                result = run_hermes(
+                    "prompt",
+                    Inputs(dry_run=False, path_to_hermes_executable=str(executable), timeout_seconds=10),
+                    extra_env={"HERMES_TRACKING_COMMENT_ENDPOINT": "http://127.0.0.1/update"},
+                )
+        self.assertTrue(result.success)
+        self.assertIn("TOKEN=False", result.stdout)
+        self.assertIn("INPUT_TOKEN=False", result.stdout)
+        self.assertIn("OUTPUT=False", result.stdout)
+        self.assertIn("TRACKING=http://127.0.0.1/update", result.stdout)
 
+    def _tmpdir(self) -> str:
         return tempfile.mkdtemp(prefix="hermes-action-test-")
 
 

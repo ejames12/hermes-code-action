@@ -35,6 +35,20 @@ class TriggerTests(unittest.TestCase):
         self.assertEqual(decision.mode, "tag")
         self.assertIn("fix the bug", decision.user_request)
 
+    def test_issue_title_plan_request_preserves_plan_command(self) -> None:
+        payload = {
+            "event_name": "issues",
+            "action": "opened",
+            "sender": {"login": "maintainer"},
+            "repository": {"full_name": "acme/repo", "default_branch": "main"},
+            "issue": {"number": 7, "title": "@hermes plan", "body": "Build the OAuth flow"},
+        }
+        ctx = parse_context(payload)
+        decision = detect_trigger(ctx, Inputs())
+        self.assertTrue(decision.should_run)
+        self.assertTrue(decision.user_request.lower().startswith("plan"))
+        self.assertIn("Build the OAuth flow", decision.user_request)
+
     def test_prompt_forces_agent_mode(self) -> None:
         payload = {
             "sender": {"login": "maintainer"},

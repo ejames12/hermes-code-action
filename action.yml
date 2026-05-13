@@ -131,6 +131,18 @@ inputs:
     description: "Build prompt/comments but skip Hermes execution. Useful for tests."
     required: false
     default: "false"
+  orchestration_mode:
+    description: "Orchestration mode. 'single' (default) runs one Hermes invocation. 'staged' enables Phase 2 multi-model pipeline."
+    required: false
+    default: "single"
+  orchestration_policy:
+    description: "Path to a repo policy file (.json or .yaml) defining staged workflow stages. If empty and mode is staged, a safe built-in default is used."
+    required: false
+    default: ""
+  workflow:
+    description: "Name of the workflow to execute from the policy file."
+    required: false
+    default: "default"
 
 outputs:
   execution_file:
@@ -154,6 +166,15 @@ outputs:
   hermes_comment_id:
     description: "Tracking comment id created by tag mode."
     value: ${{ steps.run.outputs.hermes_comment_id }}
+  plan_file:
+    description: "Plan Markdown file path for @hermes plan requests."
+    value: ${{ steps.run.outputs.plan_file }}
+  plan_url:
+    description: "GitHub web URL for the plan Markdown file when available."
+    value: ${{ steps.run.outputs.plan_url }}
+  orchestration_summary:
+    description: "Short summary of staged orchestration result when orchestration_mode is 'staged'."
+    value: ${{ steps.run.outputs.orchestration_summary }}
 
 runs:
   using: composite
@@ -218,6 +239,9 @@ runs:
         INPUT_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
         INPUT_MAX_PROMPT_CHARS: ${{ inputs.max_prompt_chars }}
         INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        INPUT_ORCHESTRATION_MODE: ${{ inputs.orchestration_mode }}
+        INPUT_ORCHESTRATION_POLICY: ${{ inputs.orchestration_policy }}
+        INPUT_WORKFLOW: ${{ inputs.workflow }}
       run: |
         set -euo pipefail
         python3 -m hermes_code_action

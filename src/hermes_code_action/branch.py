@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
 import re
+import shlex
 import subprocess
 from typing import Any
 
@@ -22,6 +23,13 @@ class BranchInfo:
     hermes_branch: str | None = None
     is_new_branch: bool = False
     is_fork_pr: bool = False
+
+
+@dataclass
+class PushInfo:
+    pushed: bool = False
+    branch: str | None = None
+    message: str = ""
 
 
 def validate_branch_name(branch: str) -> None:
@@ -94,23 +102,129 @@ def current_branch(cwd: str | None = None) -> str:
     return ref_name or "HEAD"
 
 
-def configure_git_auth(token: str, ctx: GitHubContext, inputs: Inputs) -> None:
-    if not token:
-        warning("No GitHub token; skipping git auth configuration")
-        return
-    _git(["config", "user.name", inputs.bot_name])
-    safe_name = inputs.bot_name.replace("[bot]", "")
-    _git(["config", "user.email", f"{inputs.bot_id}+{safe_name}@users.noreply.github.com"])
+def _auth_remote_url(token: str, ctx: GitHubContext) -> str:
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     if server == "https://github.com":
-        remote = (
+        return (
             "https://x-access-token:"
             + token
             + f"@github.com/{ctx.repository.owner}/{ctx.repository.repo}.git"
         )
-    else:
-        remote = f"{server.rstrip('/')}/{ctx.repository.owner}/{ctx.repository.repo}.git"
-    _git(["remote", "set-url", "origin", remote], check=False)
+    return f"{server.rstrip('/')}/{ctx.repository.owner}/{ctx.repository.repo}.git"
+
+
+def _public_remote_url(ctx: GitHubContext) -> str:
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    if server == "https://github.com":
+        return f"https://github.com/{ctx.repository.owner}/{ctx.repository.repo}.git"
+    return f"{server.rstrip('/')}/{ctx.repository.owner}/{ctx.repository.repo}.git"
+
+
+def configure_git_identity(inputs: Inputs) -> None:
+    _git(["config", "user.name", inputs.bot_name])
+    safe_name = inputs.bot_name.replace("[bot]", "")
+    _git(["config", "user.email", f"{inputs.bot_id}+{safe_name}@users.noreply.github.com"])
+
+
+def configure_git_auth(token: str, ctx: GitHubContext, inputs: Inputs) -> None:
+    configure_git_identity(inputs)
+    if not token:
+        warning("No GitHub token; skipping git auth configuration")
+        return
+    _git(["remote", "set-url", "origin", _auth_remote_url(token, ctx)], check=False)
+
+
+def remove_git_push_credentials(ctx: GitHubContext) -> None:
+    """Remove token-bearing git auth before Hermes gets terminal access."""
+    if not os.path.isdir(os.path.join(workspace(), ".git")):
+        return
+    _git(["remote", "set-url", "origin", _public_remote_url(ctx)], check=False)
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+    for key in (
+        f"http.{server}/.extraheader",
+        "http.https://github.com/.extraheader",
+        "http.https://github.com.extraheader",
+    ):
+        _git(["config", "--local", "--unset-all", key], check=False)
+
+
+def protected_branches(ctx: GitHubContext, info: BranchInfo) -> set[str]:
+    return {b for b in {"main", "master", ctx.repository.default_branch, info.base_branch} if b}
+
+
+def is_protected_branch(branch: str, ctx: GitHubContext, info: BranchInfo) -> bool:
+    return branch in protected_branches(ctx, info)
+
+
+def assert_push_allowed(branch: str, ctx: GitHubContext, info: BranchInfo) -> None:
+    validate_branch_name(branch)
+    if is_protected_branch(branch, ctx, info):
+        protected = ", ".join(sorted(protected_branches(ctx, info)))
+        raise RuntimeError(
+            f"Refusing to push directly to protected branch {branch!r}. "
+            f"Hermes may only publish work on non-protected branches for human PR review. "
+            f"Protected branches: {protected}."
+        )
+
+
+def install_no_protected_branch_push_hook(ctx: GitHubContext, info: BranchInfo) -> None:
+    git_dir = os.path.join(workspace(), ".git")
+    if not os.path.isdir(git_dir):
+        return
+    protected_lines = "\n".join(sorted(protected_branches(ctx, info)))
+    hook_path = os.path.join(git_dir, "hooks", "pre-push")
+    backup_path = hook_path + ".hermes-code-action-backup"
+    marker = "# hermes-code-action protected-branch guard"
+    if os.path.exists(hook_path):
+        with open(hook_path, "r", encoding="utf-8", errors="replace") as fh:
+            existing = fh.read()
+        if marker not in existing and not os.path.exists(backup_path):
+            os.replace(hook_path, backup_path)
+    backup_call = ""
+    if os.path.exists(backup_path):
+        quoted_backup = shlex.quote(backup_path)
+        backup_call = f"bash {quoted_backup} \"$@\" < \"$tmp_input\"\n"
+    script = f"""#!/usr/bin/env bash
+{marker}
+set -euo pipefail
+tmp_input="$(mktemp)"
+cat > "$tmp_input"
+trap 'rm -f "$tmp_input"' EXIT
+{backup_call}while read -r local_ref local_sha remote_ref remote_sha; do
+  branch="${{remote_ref#refs/heads/}}"
+  while IFS= read -r protected_branch; do
+    if [ -n "$protected_branch" ] && [ "$branch" = "$protected_branch" ]; then
+      echo "Hermes Code Action refuses to push directly to protected branch '$branch'. Create a PR instead." >&2
+      exit 1
+    fi
+  done <<'HERMES_PROTECTED_BRANCHES'
+{protected_lines}
+HERMES_PROTECTED_BRANCHES
+done < "$tmp_input"
+"""
+    with open(hook_path, "w", encoding="utf-8") as fh:
+        fh.write(script)
+    os.chmod(hook_path, 0o700)
+
+
+def push_working_branch(token: str, ctx: GitHubContext, inputs: Inputs, info: BranchInfo) -> PushInfo:
+    if not os.path.isdir(os.path.join(workspace(), ".git")):
+        return PushInfo(False, None, "No git repository; nothing pushed.")
+    branch = info.hermes_branch or current_branch()
+    if not branch or branch == "HEAD":
+        return PushInfo(False, branch, "Detached HEAD; wrapper did not push.")
+    assert_push_allowed(branch, ctx, info)
+    expected = info.hermes_branch or info.current_branch
+    if expected and branch != expected:
+        raise RuntimeError(f"Refusing to push unexpected branch {branch!r}; expected {expected!r}.")
+    if not token:
+        return PushInfo(False, branch, "No GitHub token; branch was not pushed.")
+    configure_git_auth(token, ctx, inputs)
+    try:
+        _git(["push", "-u", "origin", f"HEAD:{branch}"])
+    finally:
+        remove_git_push_credentials(ctx)
+    return PushInfo(True, branch, f"Pushed branch {branch} for PR review.")
 
 
 def _source_sha(base_branch: str) -> str:

@@ -12,8 +12,8 @@ From the GitHub user's perspective, this is intended to feel like Claude Code Ac
 
 1. A maintainer comments `@hermes fix this` on an issue or pull request.
 2. The action creates a working/progress comment.
-3. Hermes receives the GitHub context, edits the checked-out repository, runs checks, commits, and pushes when appropriate.
-4. The action updates the same GitHub comment with the final result plus branch/PR links.
+3. Hermes receives the GitHub context, edits the checked-out repository when appropriate, runs checks, and commits intended changes.
+4. The action wrapper publishes only the safe working branch and updates the same GitHub comment with the final result plus branch/PR links.
 
 ## Current status
 
@@ -25,14 +25,16 @@ Implemented:
 - Explicit `prompt` agent mode for `workflow_dispatch`, `schedule`, and other automation workflows.
 - GitHub REST context collection: issue/PR metadata, comments, PR diffs, review comments, and check runs.
 - Same-repo PR checkout; issue/fork-PR branch creation under `hermes/`.
-- Initial and final tracking comments.
+- Initial, live milestone, and final tracking-comment updates.
+- `@hermes plan ...` mode that writes a Markdown implementation plan under `docs/hermes-plans/` and returns a GitHub link.
+- Wrapper-owned branch publishing with guardrails that refuse direct pushes to `main`, `master`, the repository default branch, or the PR base branch.
+- Optional staged multi-model orchestration: planner, implementer, reviewer, and adjudicator Hermes runs with per-stage provider/model/toolset overrides.
 - Hermes CLI execution through `hermes chat -q ...`.
 - Action outputs compatible with the Claude Code Action shape where practical.
 - Python stdlib only: no npm/bun/runtime dependency for the action code itself.
 
 Not yet implemented:
 
-- Streaming progress updates while Hermes is running.
 - Claude Code SDK JSON stream compatibility.
 - API commit-signing mode.
 - Inline PR review comment buffering/classification.
@@ -84,6 +86,77 @@ jobs:
 
 For local development in this repo, `examples/hermes.yml` uses `uses: ./`.
 
+## `@hermes plan` mode
+
+Comment with `@hermes plan ...` on an issue or PR when you want a reviewable implementation plan instead of code changes. Hermes may inspect the repository, then creates or updates a Markdown plan under `docs/hermes-plans/` with diagrams when useful. The wrapper pushes the non-protected Hermes branch and the final tracking comment includes a **View plan** link to the rendered Markdown file on GitHub.
+
+Plan-mode runs are validated before publishing: only the plan file and directly related assets under `docs/hermes-plans/` are allowed to change.
+
+## Staged multi-model orchestration
+
+By default the action runs a single Hermes invocation. Set `orchestration_mode: staged` to run a Phase 2 pipeline where each stage can use a different provider/model/toolset:
+
+1. **Planner** — creates the plan or design context.
+2. **Implementer** — edits code, runs checks, and commits intended changes.
+3. **Reviewer** — review-only validation. The wrapper records git state before/after and fails the run if this stage edits files, commits, or changes branches.
+4. **Adjudicator** — final decision. It receives prior stage outputs and must explicitly consider configured reviewer findings.
+
+The wrapper still owns publishing: Hermes stages must not push, and the action refuses to publish protected branches.
+
+Example workflow inputs:
+
+```yaml
+- uses: owner/hermes-code-action@v0
+  with:
+    trigger_phrase: "@hermes"
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    orchestration_mode: staged
+    orchestration_policy: .hermes/code-action.yml
+    workflow: default
+```
+
+Example `.hermes/code-action.yml`:
+
+```yaml
+version: 1
+workflows:
+  default:
+    stages:
+      - name: planner
+        mode: plan
+        provider: anthropic
+        model: claude-opus-4.7
+        toolsets: file,terminal,web
+        max_turns: 60
+
+      - name: implementer
+        mode: implement
+        provider: anthropic
+        model: claude-sonnet-4.5
+        toolsets: file,terminal
+        max_turns: 90
+
+      - name: reviewer
+        mode: review
+        provider: openai
+        model: gpt-5.1
+        toolsets: file,terminal
+        max_turns: 30
+
+      - name: adjudicator
+        mode: adjudicate
+        provider: anthropic
+        model: claude-sonnet-4.5
+        toolsets: file,terminal
+        max_turns: 30
+        must_consider:
+          - reviewer
+```
+
+Policy files may be JSON or YAML. YAML support uses PyYAML when available; JSON works with the Python stdlib. If `orchestration_mode: staged` is set and no policy file is provided/found, the action uses a safe built-in four-stage default with the normal `hermes_provider`, `hermes_model`, `hermes_toolsets`, and `hermes_max_turns` as fallbacks.
+
+For the Opus → Sonnet → GPT → Sonnet pattern: put Opus on `planner`, Sonnet on `implementer`, GPT on `reviewer`, and Sonnet on `adjudicator` with `must_consider: [reviewer]`. The adjudicator prompt requires triaging GPT's findings; the wrapper validates tests/branch rules and humans still approve merges.
+
 ## Agent mode
 
 Use an explicit prompt when you do not want mention detection:
@@ -109,6 +182,9 @@ Use an explicit prompt when you do not want mention detection:
 | `hermes_model` | empty | Optional model override. |
 | `hermes_provider` | empty | Optional provider override. |
 | `hermes_yolo` | `true` | Passes `--yolo` for non-interactive CI execution. Use only with trusted triggers. |
+| `orchestration_mode` | `single` | Set to `staged` for planner/implementer/reviewer/adjudicator runs. |
+| `orchestration_policy` | empty | Optional `.json`/`.yml` policy file path for staged mode. |
+| `workflow` | `default` | Workflow name inside the staged policy file. |
 | `install_hermes` | `false` | Run `hermes_install_command` if Hermes is missing. Prefer an explicit pinned install step. |
 | `dry_run` | `false` | Build prompt/comments but skip Hermes. |
 

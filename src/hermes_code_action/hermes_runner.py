@@ -74,7 +74,7 @@ def _parse_session_id(output: str) -> str | None:
     return None
 
 
-def run_hermes(prompt: str, inputs: Inputs) -> HermesResult:
+def run_hermes(prompt: str, inputs: Inputs, extra_env: dict[str, str] | None = None) -> HermesResult:
     if inputs.dry_run:
         executable = inputs.path_to_hermes_executable or shutil.which("hermes") or "hermes"
     else:
@@ -84,6 +84,8 @@ def run_hermes(prompt: str, inputs: Inputs) -> HermesResult:
 
     env = os.environ.copy()
     env["HERMES_ACCEPT_HOOKS"] = "1"
+    if extra_env:
+        env.update(extra_env)
     if inputs.hermes_yolo:
         env["HERMES_YOLO_MODE"] = "1"
     # OIDC request env vars let a subprocess mint cloud/GitHub tokens. Do not pass them to Hermes.
@@ -94,6 +96,8 @@ def run_hermes(prompt: str, inputs: Inputs) -> HermesResult:
     env.pop("INPUT_GITHUB_TOKEN", None)
     env.pop("GITHUB_TOKEN", None)
     env.pop("GH_TOKEN", None)
+    # Do not let Hermes read or write the action output file; it may contain privileged wrapper outputs.
+    env.pop("GITHUB_OUTPUT", None)
 
     started = time.time()
     if inputs.dry_run:

@@ -1,0 +1,198 @@
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import unittest
+from unittest import mock
+
+from tests import _paths  # noqa: F401
+from hermes_code_action.config import Inputs
+from hermes_code_action.hermes_runner import HermesResult
+from hermes_code_action.orchestrator import _build_stage_prompt, _stage_inputs, run_staged
+from hermes_code_action.policy import OrchestrationPolicy, StagePolicy
+
+
+def _success_result(stdout: str = "ok", **kwargs) -> HermesResult:
+    return HermesResult(
+        conclusion="success",
+        stdout=stdout,
+        stderr="",
+        returncode=0,
+        execution_file="/tmp/exec.json",
+        duration_seconds=0.1,
+        **kwargs,
+    )
+
+
+def _failure_result(stdout: str = "", stderr: str = "boom") -> HermesResult:
+    return HermesResult(
+        conclusion="failure",
+        stdout=stdout,
+        stderr=stderr,
+        returncode=1,
+        execution_file="/tmp/exec.json",
+        duration_seconds=0.1,
+    )
+
+
+class StagedPromptTests(unittest.TestCase):
+    def test_preamble_injected_per_mode(self) -> None:
+        stage = StagePolicy(name="planner", mode="plan")
+        prompt = _build_stage_prompt("do the thing", stage, {})
+        self.assertIn("planner", prompt.lower())
+        self.assertIn("do the thing", prompt)
+
+    def test_review_prompt_contains_no_edit_notice(self) -> None:
+        stage = StagePolicy(name="reviewer", mode="review")
+        prompt = _build_stage_prompt("review this", stage, {})
+        self.assertIn("REVIEWER CONSTRAINT", prompt)
+        self.assertIn("Do NOT make any file edits", prompt)
+
+    def test_adjudicate_prompt_contains_no_edit_notice(self) -> None:
+        stage = StagePolicy(name="adjudicator", mode="adjudicate")
+        prompt = _build_stage_prompt("adjudicate", stage, {})
+        self.assertIn("ADJUDICATOR CONSTRAINT", prompt)
+        self.assertIn("Do NOT make any file edits", prompt)
+
+    def test_must_consider_injects_prior_output(self) -> None:
+        stage = StagePolicy(name="adjudicator", mode="adjudicate", must_consider=["reviewer"])
+        prior = {"reviewer": "LGTM with concerns", "implementer": "done"}
+        prompt = _build_stage_prompt("decide", stage, prior)
+        self.assertIn("reviewer", prompt)
+        self.assertIn("LGTM with concerns", prompt)
+        # implementer not in must_consider but still injected because prior_outputs present
+        self.assertIn("implementer", prompt)
+
+    def test_no_prior_outputs_not_injected_for_plan(self) -> None:
+        stage = StagePolicy(name="planner", mode="plan")
+        prompt = _build_stage_prompt("plan something", stage, {})
+        self.assertNotIn("Prior stage outputs", prompt)
+
+
+class StageInputsTests(unittest.TestCase):
+    def test_stage_overrides_model_and_provider(self) -> None:
+        base = Inputs(hermes_model="base-model", hermes_provider="anthropic")
+        stage = StagePolicy(name="s", mode="implement", model="override-model", provider="openai")
+        result = _stage_inputs(base, stage)
+        self.assertEqual(result.hermes_model, "override-model")
+        self.assertEqual(result.hermes_provider, "openai")
+        # Other fields unchanged
+        self.assertEqual(result.dry_run, base.dry_run)
+
+    def test_stage_empty_overrides_leave_base_unchanged(self) -> None:
+        base = Inputs(hermes_model="base-model")
+        stage = StagePolicy(name="s", mode="plan")
+        result = _stage_inputs(base, stage)
+        self.assertIs(result, base)
+
+    def test_stage_overrides_toolsets_and_max_turns(self) -> None:
+        base = Inputs(hermes_toolsets="file,terminal,web", hermes_max_turns="90")
+        stage = StagePolicy(name="s", mode="review", toolsets="file", max_turns="10")
+        result = _stage_inputs(base, stage)
+        self.assertEqual(result.hermes_toolsets, "file")
+        self.assertEqual(result.hermes_max_turns, "10")
+
+
+class RunStagedTests(unittest.TestCase):
+    def _policy(self, *modes: str) -> OrchestrationPolicy:
+        stages = [StagePolicy(name=m, mode=m) for m in modes]
+        return OrchestrationPolicy(stages=stages)
+
+    def test_all_stages_run_on_success(self) -> None:
+        policy = self._policy("plan", "implement", "review", "adjudicate")
+        results = [_success_result(f"stage {m}") for m in ["plan", "implement", "review", "adjudicate"]]
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", side_effect=results) as mocked:
+                    final = run_staged("base prompt", Inputs(dry_run=True), policy)
+        self.assertEqual(mocked.call_count, 4)
+        self.assertTrue(final.success)
+        self.assertIn("plan", final.stdout)
+        self.assertIn("adjudicate", final.stdout)
+
+    def test_stops_on_first_failure(self) -> None:
+        policy = self._policy("plan", "implement", "review", "adjudicate")
+        side_effects = [
+            _success_result("plan done"),
+            _failure_result(stderr="impl error"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", side_effect=side_effects) as mocked:
+                    final = run_staged("base prompt", Inputs(dry_run=True), policy)
+        self.assertEqual(mocked.call_count, 2)
+        self.assertFalse(final.success)
+        self.assertEqual(final.conclusion, "failure")
+        self.assertIn("implement", final.stdout)
+
+    def test_review_stage_fails_if_it_changes_git_state(self) -> None:
+        policy = OrchestrationPolicy(stages=[StagePolicy(name="reviewer", mode="review")])
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", return_value=_success_result("review done")):
+                    with mock.patch(
+                        "hermes_code_action.orchestrator._git_state",
+                        side_effect=[("sha1", ""), ("sha2", " M src/file.py\n")],
+                    ):
+                        final = run_staged("base prompt", Inputs(dry_run=True), policy)
+        self.assertFalse(final.success)
+        self.assertIn("Read-only stage `reviewer`", final.stdout)
+
+    def test_review_stage_allows_unchanged_git_state(self) -> None:
+        policy = OrchestrationPolicy(stages=[StagePolicy(name="reviewer", mode="review")])
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", return_value=_success_result("review done")):
+                    with mock.patch(
+                        "hermes_code_action.orchestrator._git_state",
+                        side_effect=[("sha1", ""), ("sha1", "")],
+                    ):
+                        final = run_staged("base prompt", Inputs(dry_run=True), policy)
+        self.assertTrue(final.success)
+        self.assertIn("review done", final.stdout)
+
+    def test_prior_stage_output_passed_to_later_stages(self) -> None:
+        policy = OrchestrationPolicy(stages=[
+            StagePolicy(name="planner", mode="plan"),
+            StagePolicy(name="implementer", mode="implement"),
+        ])
+        captured_prompts: list[str] = []
+
+        def fake_run(prompt: str, inp: Inputs, **kw) -> HermesResult:
+            captured_prompts.append(prompt)
+            return _success_result(f"output for {inp.hermes_model or 'default'}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", side_effect=fake_run):
+                    run_staged("do work", Inputs(dry_run=True), policy)
+
+        # Second stage prompt should contain prior stage output
+        self.assertIn("planner", captured_prompts[1])
+
+    def test_writes_execution_json(self) -> None:
+        policy = self._policy("plan", "implement")
+        side_effects = [_success_result("p"), _success_result("i")]
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", side_effect=side_effects):
+                    final = run_staged("base", Inputs(dry_run=True), policy)
+            with open(final.execution_file, encoding="utf-8") as fh:
+                data = json.loads(fh.read())
+        self.assertEqual(data["orchestration_mode"], "staged")
+        self.assertEqual(data["conclusion"], "success")
+        self.assertEqual([s["stage"] for s in data["stages"]], ["plan", "implement"])
+
+    def test_single_stage_preserves_session_id(self) -> None:
+        policy = self._policy("plan")
+        result = _success_result("done", session_id="abc123")
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", return_value=result):
+                    final = run_staged("prompt", Inputs(dry_run=True), policy)
+        self.assertEqual(final.session_id, "abc123")
+
+
+if __name__ == "__main__":
+    unittest.main()

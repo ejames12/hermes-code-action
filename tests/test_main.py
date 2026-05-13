@@ -49,6 +49,43 @@ class MainTests(unittest.TestCase):
             self.assertIn("conclusion=success", text)
             self.assertIn("structured_output=", text)
             self.assertIn("execution_file=", text)
+    def test_staged_mode_dry_run_sets_orchestration_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            event = root / "event.json"
+            event.write_text(
+                json.dumps(
+                    {
+                        "sender": {"login": "alice"},
+                        "repository": {
+                            "full_name": "acme/repo",
+                            "default_branch": "main",
+                            "html_url": "https://github.com/acme/repo",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "outputs.txt"
+            env = {
+                "GITHUB_EVENT_PATH": str(event),
+                "GITHUB_EVENT_NAME": "workflow_dispatch",
+                "GITHUB_ACTOR": "alice",
+                "GITHUB_OUTPUT": str(output),
+                "GITHUB_WORKSPACE": str(root),
+                "RUNNER_TEMP": str(root / "tmp"),
+                "INPUT_PROMPT": "Say hello",
+                "INPUT_DRY_RUN": "true",
+                "INPUT_ORCHESTRATION_MODE": "staged",
+                "INPUT_PATH_TO_HERMES_EXECUTABLE": "hermes",
+                "INPUT_GITHUB_TOKEN": "",
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                code = main()
+            self.assertEqual(code, 0)
+            text = output.read_text(encoding="utf-8")
+            self.assertIn("conclusion=success", text)
+            self.assertIn("orchestration_summary=staged:planner,implementer,reviewer,adjudicator:success", text)
 
 
 if __name__ == "__main__":

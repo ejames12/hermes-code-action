@@ -87,7 +87,7 @@ def detect_trigger(ctx: GitHubContext, inputs: Inputs) -> TriggerDecision:
     if event == "issues":
         text = f"{ctx.title}\n\n{ctx.body}"
         if action in {"opened", "edited"} and contains_trigger(text, phrase):
-            return TriggerDecision(True, "tag", f"{phrase} mention in issue", remove_trigger(ctx.body or ctx.title, phrase) or text)
+            return TriggerDecision(True, "tag", f"{phrase} mention in issue", remove_trigger(text, phrase) or text)
         if action == "assigned" and inputs.assignee_trigger:
             wanted = inputs.assignee_trigger.lstrip("@").lower()
             if any(login.lower() == wanted for login in _assignee_logins(ctx.payload)):
