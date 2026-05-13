@@ -105,6 +105,14 @@ Plan requirements:
 """.strip()
 
 
+def _review_mode_section(review_requested: bool) -> str:
+    if not review_requested:
+        return "This is not a dedicated review-only request."
+    return """The user's request is a review-only request (`@hermes review ...`). Do NOT edit files, create commits, change branches, push, approve, merge, or create PRs.
+
+Review the PR/repository context using Hermes's own default model and tool harness. Provide concise findings, risks, and recommended follow-up only.""".strip()
+
+
 def build_prompt(
     ctx: GitHubContext,
     inputs: Inputs,
@@ -116,6 +124,7 @@ def build_prompt(
     run_url: str,
     plan_info: PlanInfo | None = None,
     tracking_tool_command: str | None = None,
+    review_requested: bool = False,
 ) -> str:
     entity = f"#{ctx.entity_number}" if ctx.entity_number else "(no issue/PR entity)"
     mode = "pull request" if ctx.is_pr else "issue"
@@ -129,6 +138,7 @@ def build_prompt(
     branch_name = branch.hermes_branch or branch.current_branch or "current checkout"
     progress_tool_section = _progress_tool_section(tracking_tool_command)
     plan_section = _plan_mode_section(plan_info)
+    review_section = _review_mode_section(review_requested)
 
     prompt = f"""
 You are Hermes Agent running inside GitHub Actions as a repository automation agent.
@@ -186,6 +196,9 @@ If you make changes, use:
 
 ## Plan mode
 {plan_section}
+
+## Review mode
+{review_section}
 
 ## User request
 {user_request or '(No explicit request text; infer from the trigger context.)'}

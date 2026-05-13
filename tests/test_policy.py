@@ -77,6 +77,16 @@ class PolicyTests(unittest.TestCase):
     def test_single_mode_disables_policy(self) -> None:
         self.assertIsNone(load_orchestration_policy(Inputs(orchestration_mode="single")))
 
+    def test_plan_request_routes_to_plan_stage_only(self) -> None:
+        policy = load_orchestration_policy(Inputs(orchestration_mode="staged"), "plan the refactor")
+        self.assertIsNotNone(policy)
+        assert policy is not None
+        self.assertEqual([stage.mode for stage in policy.stages], ["plan"])
+
+    def test_review_request_routes_to_single_hermes_invocation(self) -> None:
+        policy = load_orchestration_policy(Inputs(orchestration_mode="staged"), "review this PR")
+        self.assertIsNone(policy)
+
     def test_stage_policy_rejects_unknown_mode(self) -> None:
         with self.assertRaises(ValueError):
             StagePolicy(name="x", mode="merge")

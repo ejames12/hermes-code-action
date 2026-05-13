@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Inputs
+from .plan import is_plan_request, is_review_request
 
 _VALID_MODES = {"plan", "implement", "review", "adjudicate"}
 
@@ -86,17 +87,42 @@ def _load_policy_file(path: Path, workflow: str) -> OrchestrationPolicy:
     return OrchestrationPolicy(stages=stages)
 
 
-def load_orchestration_policy(inputs: Inputs) -> OrchestrationPolicy | None:
+def _first_stage_with_mode(policy: OrchestrationPolicy, mode: str) -> OrchestrationPolicy:
+    for stage in policy.stages:
+        if stage.mode == mode:
+            return OrchestrationPolicy(stages=[stage])
+    # Fall back to the built-in stage for the requested mode if the policy omitted it.
+    for stage in _DEFAULT_STAGES:
+        if stage.mode == mode:
+            return OrchestrationPolicy(stages=[stage])
+    return OrchestrationPolicy(stages=[])
+
+
+def _route_policy_for_request(policy: OrchestrationPolicy, user_request: str) -> OrchestrationPolicy | None:
+    """Route natural @mrl-hermes commands to the smallest useful execution shape."""
+    if is_plan_request(user_request):
+        return _first_stage_with_mode(policy, "plan")
+    if is_review_request(user_request):
+        # Review requests should use one local/default Hermes invocation rather than the
+        # full plan -> implement -> review -> adjudicate pipeline.
+        return None
+    return policy
+
+
+def load_orchestration_policy(inputs: Inputs, user_request: str = "") -> OrchestrationPolicy | None:
     """Return an OrchestrationPolicy for staged mode, or None for single mode."""
     if inputs.orchestration_mode != "staged":
         return None
 
     policy_path_str = (inputs.orchestration_policy or "").strip()
     if not policy_path_str:
-        return OrchestrationPolicy(stages=list(_DEFAULT_STAGES))
+        policy = OrchestrationPolicy(stages=list(_DEFAULT_STAGES))
+        return _route_policy_for_request(policy, user_request)
 
     policy_path = Path(policy_path_str)
     if not policy_path.exists():
-        return OrchestrationPolicy(stages=list(_DEFAULT_STAGES))
+        policy = OrchestrationPolicy(stages=list(_DEFAULT_STAGES))
+        return _route_policy_for_request(policy, user_request)
 
-    return _load_policy_file(policy_path, inputs.workflow or "default")
+    policy = _load_policy_file(policy_path, inputs.workflow or "default")
+    return _route_policy_for_request(policy, user_request)

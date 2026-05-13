@@ -24,6 +24,12 @@ def is_plan_request(user_request: str) -> bool:
     return bool(re.match(r"^plan(?=$|\s|:|\.)", request))
 
 
+def is_review_request(user_request: str) -> bool:
+    """Return True for `@hermes review ...`-style requests."""
+    request = (user_request or "").strip().lower()
+    return bool(re.match(r"^review(?=$|\s|:|\.)", request))
+
+
 def plan_file_path(ctx: GitHubContext) -> str:
     entity_type = "pr" if ctx.is_pr else "issue" if ctx.entity_number else "run"
     entity_number = str(ctx.entity_number or "manual")
@@ -83,4 +89,14 @@ def assert_plan_only_changes(plan_info: PlanInfo, start_ref: str) -> None:
         raise RuntimeError(
             "Plan-only request modified files outside docs/hermes-plans/. "
             "Refusing to publish the branch. Disallowed files:\n" + formatted
+        )
+
+
+def assert_review_only_changes(start_ref: str) -> None:
+    changed = changed_files_since(start_ref)
+    if changed:
+        formatted = "\n".join(f"- {path}" for path in changed)
+        raise RuntimeError(
+            "Review-only request modified repository files. Refusing to publish changes. "
+            "Disallowed files:\n" + formatted
         )

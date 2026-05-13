@@ -21,7 +21,15 @@ from .github_api import GitHubApi
 from .github_context import parse_context
 from .hermes_runner import HermesResult, run_hermes
 from .orchestrator import run_staged
-from .plan import PlanInfo, assert_plan_only_changes, build_plan_info, current_head_sha, is_plan_request
+from .plan import (
+    PlanInfo,
+    assert_plan_only_changes,
+    assert_review_only_changes,
+    build_plan_info,
+    current_head_sha,
+    is_plan_request,
+    is_review_request,
+)
 from .policy import load_orchestration_policy
 from .prompt import build_prompt, collect_github_data
 from .security import validate_actor
@@ -130,6 +138,7 @@ def main() -> int:
         start_head = current_head_sha()
 
         plan_requested = decision.mode == "tag" and is_plan_request(decision.user_request)
+        review_requested = decision.mode == "tag" and is_review_request(decision.user_request)
         if plan_requested:
             plan_info = build_plan_info(ctx, branch_info)
             set_output("plan_file", plan_info.file_path)
@@ -149,12 +158,13 @@ def main() -> int:
             run_link,
             plan_info,
             tracking_tool.command_hint if tracking_tool else None,
+            review_requested,
         )
         prompt_file = write_prompt_file(prompt)
         set_output("prompt_file", prompt_file)
         notice(f"Prompt written to {prompt_file} ({len(prompt)} chars)")
 
-        orchestration_policy = load_orchestration_policy(inputs)
+        orchestration_policy = load_orchestration_policy(inputs, decision.user_request)
         if orchestration_policy is not None:
             notice(f"Staged orchestration active: {len(orchestration_policy.stages)} stages")
             result = run_staged(
@@ -170,7 +180,9 @@ def main() -> int:
             tracking_server = None
         if result.success and plan_info is not None:
             assert_plan_only_changes(plan_info, start_head)
-        if result.success and not inputs.dry_run and decision.mode == "tag":
+        if result.success and review_requested:
+            assert_review_only_changes(start_head)
+        if result.success and not inputs.dry_run and decision.mode == "tag" and not review_requested:
             push_info = push_working_branch(inputs.github_token, ctx, inputs, branch_info)
         set_output("execution_file", result.execution_file)
         set_output("session_id", result.session_id or "")
