@@ -84,6 +84,19 @@ def _assignee_logins(ctx, data) -> list[str]:
     return logins
 
 
+def _read_plan_text(plan_info: PlanInfo | None) -> str:
+    if not plan_info or not plan_info.file_path:
+        return ""
+    path = Path(workspace()) / plan_info.file_path
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        warning(f"Could not read plan file for stage summary: {exc}")
+        return ""
+
+
 def _post_stage_update(
     api: GitHubApi | None,
     ctx,
@@ -96,6 +109,7 @@ def _post_stage_update(
     stage: StagePolicy,
     result: HermesResult,
     completed: list[tuple[str, HermesResult]],
+    plan_info: PlanInfo | None = None,
 ) -> None:
     if api is None or not ctx.has_entity:
         return
@@ -122,6 +136,8 @@ def _post_stage_update(
                 assignees=assignees,
                 stage_number=len(completed),
                 total_stages=len(stage_names),
+                plan_url=plan_info.web_url if plan_info else None,
+                plan_text=_read_plan_text(plan_info) if stage.mode == "plan" else None,
             ),
         )
     except Exception as exc:  # noqa: BLE001
@@ -262,6 +278,7 @@ def main() -> int:
                     stage=stage,
                     result=stage_result,
                     completed=completed_stage_results,
+                    plan_info=plan_info,
                 )
 
             result = run_staged(
