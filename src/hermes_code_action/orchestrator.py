@@ -6,9 +6,10 @@ import os
 from pathlib import Path
 import subprocess
 import time
+from typing import Callable
 
 from .config import Inputs
-from .hermes_runner import HermesResult, run_hermes
+from .hermes_runner import HermesResult, effective_model_info, run_hermes
 from .policy import OrchestrationPolicy, StagePolicy
 from .util import notice, truncate, workspace
 
@@ -48,6 +49,7 @@ _CLAUDE_THROTTLE_MARKERS = (
     "api_retry",
     "quota exceeded",
 )
+StageCompleteCallback = Callable[[StagePolicy, HermesResult, list[tuple[str, HermesResult]]], None]
 
 
 def _build_stage_prompt(base_prompt: str, stage: StagePolicy, prior_outputs: dict[str, str]) -> str:
@@ -105,6 +107,45 @@ def _looks_like_claude_throttle(result: HermesResult) -> bool:
     return any(marker in text for marker in _CLAUDE_THROTTLE_MARKERS)
 
 
+def _annotate_model_info(
+    result: HermesResult,
+    inputs: Inputs,
+    *,
+    fallback_used: bool = False,
+    primary: HermesResult | None = None,
+) -> HermesResult:
+    provider, model = effective_model_info(inputs)
+    return dataclasses.replace(
+        result,
+        provider=result.provider or provider,
+        model=result.model or model,
+        fallback_used=fallback_used or result.fallback_used,
+        primary_provider=(primary.provider if primary else result.primary_provider),
+        primary_model=(primary.model if primary else result.primary_model),
+    )
+
+
+def _model_summary(result: HermesResult) -> str:
+    if result.provider and result.model:
+        label = f"{result.provider} / {result.model}"
+    elif result.model:
+        label = result.model
+    elif result.provider:
+        label = f"{result.provider} / configured default model"
+    else:
+        label = "Hermes configured default model"
+    if result.fallback_used:
+        primary = ""
+        if result.primary_provider and result.primary_model:
+            primary = f"; primary attempt: {result.primary_provider} / {result.primary_model}"
+        elif result.primary_model:
+            primary = f"; primary attempt: {result.primary_model}"
+        elif result.primary_provider:
+            primary = f"; primary attempt: {result.primary_provider} / configured default model"
+        return f"{label} (fallback after Claude throttling{primary})"
+    return label
+
+
 def _build_fallback_prompt(stage_prompt: str, failed_result: HermesResult) -> str:
     failure_summary = truncate((failed_result.stderr or failed_result.stdout or "").strip(), 4_000)
     return f"""{stage_prompt}
@@ -136,6 +177,11 @@ def _fallback_result(primary: HermesResult, fallback: HermesResult) -> HermesRes
         execution_file=fallback.execution_file,
         duration_seconds=primary.duration_seconds + fallback.duration_seconds,
         session_id=fallback.session_id or primary.session_id,
+        provider=fallback.provider,
+        model=fallback.model,
+        fallback_used=True,
+        primary_provider=primary.provider,
+        primary_model=primary.model,
     )
 
 
@@ -180,6 +226,11 @@ def _fail_read_only_stage(stage: StagePolicy, result: HermesResult) -> HermesRes
         execution_file=result.execution_file,
         duration_seconds=result.duration_seconds,
         session_id=result.session_id,
+        provider=result.provider,
+        model=result.model,
+        fallback_used=result.fallback_used,
+        primary_provider=result.primary_provider,
+        primary_model=result.primary_model,
     )
 
 
@@ -206,6 +257,11 @@ def _write_staged_execution_file(stage_results: list[tuple[str, HermesResult]], 
             "conclusion": r.conclusion,
             "returncode": r.returncode,
             "duration_seconds": r.duration_seconds,
+            "provider": r.provider,
+            "model": r.model,
+            "fallback_used": r.fallback_used,
+            "primary_provider": r.primary_provider,
+            "primary_model": r.primary_model,
             "stdout_summary": truncate(r.stdout, 4_000),
             "stderr_summary": truncate(r.stderr, 2_000),
         })
@@ -224,6 +280,7 @@ def run_staged(
     policy: OrchestrationPolicy,
     *,
     extra_env: dict[str, str] | None = None,
+    on_stage_complete: StageCompleteCallback | None = None,
 ) -> HermesResult:
     """Run multiple Hermes invocations in stage order per the policy."""
     stage_results: list[tuple[str, HermesResult]] = []
@@ -237,7 +294,7 @@ def run_staged(
         stage_prompt = _build_stage_prompt(base_prompt, stage, prior_outputs)
         stage_inputs = _stage_inputs(inputs, stage)
         read_only_before = _git_state() if stage.mode in {"review", "adjudicate"} else None
-        result = run_hermes(stage_prompt, stage_inputs, extra_env=extra_env)
+        result = _annotate_model_info(run_hermes(stage_prompt, stage_inputs, extra_env=extra_env), stage_inputs)
         fallback_inputs = _fallback_stage_inputs(inputs, stage_inputs)
         if not result.success and fallback_inputs is not None and _looks_like_claude_throttle(result):
             notice(
@@ -245,13 +302,20 @@ def run_staged(
                 "retrying with secondary Hermes model."
             )
             fallback_prompt = _build_fallback_prompt(stage_prompt, result)
-            fallback = run_hermes(fallback_prompt, fallback_inputs, extra_env=extra_env)
+            fallback = _annotate_model_info(
+                run_hermes(fallback_prompt, fallback_inputs, extra_env=extra_env),
+                fallback_inputs,
+                fallback_used=True,
+                primary=result,
+            )
             result = _fallback_result(result, fallback)
         if read_only_before is not None and result.success:
             read_only_after = _git_state()
             if read_only_after is not None and read_only_after != read_only_before:
                 result = _fail_read_only_stage(stage, result)
         stage_results.append((stage.name, result))
+        if on_stage_complete is not None:
+            on_stage_complete(stage, result, list(stage_results))
 
         # Keep a summary of this stage's output for subsequent stages
         prior_outputs[stage.name] = (result.stdout or result.stderr).strip()
@@ -273,7 +337,8 @@ def run_staged(
         icon = "✅" if r.success else "❌"
         duration = f"{r.duration_seconds:.1f}s"
         summary = _compact_stage_summary(r)
-        lines.append(f"- **{stage_name}** {icon} `{r.conclusion}` ({duration}): {summary}")
+        model = _model_summary(r)
+        lines.append(f"- **{stage_name}** {icon} `{r.conclusion}` ({duration}) — {model}: {summary}")
 
     if failed:
         lines.append("")

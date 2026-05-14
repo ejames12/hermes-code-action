@@ -21,10 +21,33 @@ class HermesResult:
     execution_file: str
     duration_seconds: float
     session_id: str | None = None
+    provider: str = ""
+    model: str = ""
+    fallback_used: bool = False
+    primary_provider: str = ""
+    primary_model: str = ""
 
     @property
     def success(self) -> bool:
         return self.conclusion == "success"
+
+
+def _arg_value(args: list[str], flag: str) -> str:
+    for index, arg in enumerate(args):
+        if arg == flag and index + 1 < len(args):
+            return args[index + 1]
+        prefix = f"{flag}="
+        if arg.startswith(prefix):
+            return arg[len(prefix):]
+    return ""
+
+
+def effective_model_info(inputs: Inputs) -> tuple[str, str]:
+    """Return the provider/model requested for a Hermes invocation."""
+    extra_args = inputs.hermes_extra_args
+    provider = inputs.hermes_provider or _arg_value(extra_args, "--provider")
+    model = inputs.hermes_model or _arg_value(extra_args, "--model")
+    return provider, model
 
 
 def find_hermes_executable(inputs: Inputs) -> str:
@@ -127,6 +150,8 @@ def run_hermes(prompt: str, inputs: Inputs, extra_env: dict[str, str] | None = N
         "conclusion": conclusion,
         "returncode": returncode,
         "duration_seconds": duration,
+        "provider": effective_model_info(inputs)[0],
+        "model": effective_model_info(inputs)[1],
         "stdout": stdout if inputs.show_full_output else truncate(stdout, 80_000),
         "stderr": stderr if inputs.show_full_output else truncate(stderr, 40_000),
     }
@@ -137,6 +162,7 @@ def run_hermes(prompt: str, inputs: Inputs, extra_env: dict[str, str] | None = N
     if stderr:
         notice("Hermes stderr:\n" + (stderr if inputs.show_full_output else truncate(stderr, 8000)))
 
+    provider, model = effective_model_info(inputs)
     return HermesResult(
         conclusion=conclusion,
         stdout=stdout,
@@ -145,4 +171,6 @@ def run_hermes(prompt: str, inputs: Inputs, extra_env: dict[str, str] | None = N
         execution_file=str(execution_file),
         duration_seconds=duration,
         session_id=_parse_session_id(stdout + "\n" + stderr),
+        provider=provider,
+        model=model,
     )

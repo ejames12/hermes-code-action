@@ -4,14 +4,35 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from tests import _paths  # noqa: F401
-from hermes_code_action.main import main
+from hermes_code_action.github_context import parse_context
+from hermes_code_action.main import _assignee_logins, main
 
 
 class MainTests(unittest.TestCase):
+    def test_assignee_logins_prefers_fetched_data_and_deduplicates_payload(self) -> None:
+        ctx = parse_context({
+            "event_name": "issue_comment",
+            "sender": {"login": "alice"},
+            "repository": {"full_name": "acme/repo", "default_branch": "main"},
+            "issue": {
+                "number": 1,
+                "title": "T",
+                "body": "B",
+                "assignees": [{"login": "bob"}, {"login": "carol"}],
+            },
+            "comment": {"id": 2, "body": "@hermes"},
+        })
+        data = SimpleNamespace(
+            issue={"assignees": [{"login": "dave"}, {"login": "bob"}]},
+            pull_request=None,
+        )
+        self.assertEqual(_assignee_logins(ctx, data), ["dave", "bob", "carol"])
+
     def test_agent_mode_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

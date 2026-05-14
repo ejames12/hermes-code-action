@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import time
 import traceback
+from typing import Any
 
 from .branch import (
     BranchInfo,
@@ -15,7 +16,13 @@ from .branch import (
     remove_git_push_credentials,
     setup_branch,
 )
-from .comments import TrackingComment, final_comment_body, initial_comment_body
+from .comments import (
+    TrackingComment,
+    final_comment_body,
+    initial_comment_body,
+    stage_summary_comment_body,
+    staged_tracking_comment_body,
+)
 from .config import load_inputs
 from .github_api import GitHubApi
 from .github_context import parse_context
@@ -30,7 +37,7 @@ from .plan import (
     is_plan_request,
     is_review_request,
 )
-from .policy import load_orchestration_policy
+from .policy import StagePolicy, load_orchestration_policy
 from .prompt import build_prompt, collect_github_data
 from .security import validate_actor
 from .tracking import TrackingCommentServer, TrackingTool, start_tracking_tool
@@ -52,6 +59,73 @@ def update_tracking_comment(api: GitHubApi | None, tracking: TrackingComment, bo
         api.update_issue_comment(tracking.id, body)
     except Exception as exc:  # noqa: BLE001
         warning(f"Could not update tracking comment: {exc}")
+
+
+def _assignee_logins(ctx, data) -> list[str]:
+    """Return issue/PR assignees from fetched GitHub data or the event payload."""
+    candidates: list[dict[str, Any] | None] = []
+    candidates.extend([getattr(data, "issue", None), getattr(data, "pull_request", None)])
+    if isinstance(ctx.payload, dict):
+        candidates.extend([ctx.payload.get("issue"), ctx.payload.get("pull_request")])
+    seen: set[str] = set()
+    logins: list[str] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        for assignee in item.get("assignees") or []:
+            login = (assignee or {}).get("login") if isinstance(assignee, dict) else ""
+            if not login:
+                continue
+            key = login.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            logins.append(login)
+    return logins
+
+
+def _post_stage_update(
+    api: GitHubApi | None,
+    ctx,
+    tracking: TrackingComment,
+    *,
+    started_at: float,
+    run_link: str,
+    stage_names: list[str],
+    assignees: list[str],
+    stage: StagePolicy,
+    result: HermesResult,
+    completed: list[tuple[str, HermesResult]],
+) -> None:
+    if api is None or not ctx.has_entity:
+        return
+    try:
+        update_tracking_comment(
+            api,
+            tracking,
+            staged_tracking_comment_body(
+                ctx,
+                run_url=run_link,
+                stage_names=stage_names,
+                stage_results=completed,
+                started_at=started_at,
+            ),
+        )
+        api.create_issue_comment(
+            ctx.entity_number,
+            stage_summary_comment_body(
+                ctx,
+                stage_name=stage.name,
+                stage_mode=stage.mode,
+                result=result,
+                run_url=run_link,
+                assignees=assignees,
+                stage_number=len(completed),
+                total_stages=len(stage_names),
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        warning(f"Could not post staged progress comment: {exc}")
 
 
 def write_prompt_file(prompt: str) -> str:
@@ -122,10 +196,16 @@ def main() -> int:
     tracking_tool: TrackingTool | None = None
     start_head = ""
     result: HermesResult | None = None
+    orchestration_policy = None
+    stage_names: list[str] = []
+    assignees: list[str] = []
+    completed_stage_results: list[tuple[str, HermesResult]] = []
 
     try:
+        orchestration_policy = load_orchestration_policy(inputs, decision.user_request)
+        stage_names = [stage.name for stage in orchestration_policy.stages] if orchestration_policy else []
         if decision.mode == "tag" and ctx.has_entity:
-            tracking = create_tracking_comment(api, ctx, initial_comment_body(ctx, run_link))
+            tracking = create_tracking_comment(api, ctx, initial_comment_body(ctx, run_link, stage_names=stage_names))
             if tracking.id:
                 set_output("hermes_comment_id", str(tracking.id))
 
@@ -147,6 +227,7 @@ def main() -> int:
         tracking_server, tracking_tool = start_tracking_tool(api, tracking)
 
         data = collect_github_data(ctx, inputs, api, branch_info)
+        assignees = _assignee_logins(ctx, data)
         prompt = build_prompt(
             ctx,
             inputs,
@@ -164,14 +245,31 @@ def main() -> int:
         set_output("prompt_file", prompt_file)
         notice(f"Prompt written to {prompt_file} ({len(prompt)} chars)")
 
-        orchestration_policy = load_orchestration_policy(inputs, decision.user_request)
         if orchestration_policy is not None:
             notice(f"Staged orchestration active: {len(orchestration_policy.stages)} stages")
+
+            def on_stage_complete(stage: StagePolicy, stage_result: HermesResult, completed: list[tuple[str, HermesResult]]) -> None:
+                nonlocal completed_stage_results
+                completed_stage_results = list(completed)
+                _post_stage_update(
+                    api,
+                    ctx,
+                    tracking,
+                    started_at=started_at,
+                    run_link=run_link,
+                    stage_names=stage_names,
+                    assignees=assignees,
+                    stage=stage,
+                    result=stage_result,
+                    completed=completed_stage_results,
+                )
+
             result = run_staged(
                 prompt,
                 inputs,
                 orchestration_policy,
                 extra_env=tracking_tool.env if tracking_tool else None,
+                on_stage_complete=on_stage_complete,
             )
         else:
             result = run_hermes(prompt, inputs, extra_env=tracking_tool.env if tracking_tool else None)
@@ -188,16 +286,29 @@ def main() -> int:
         set_output("session_id", result.session_id or "")
         set_output("conclusion", result.conclusion)
         if orchestration_policy is not None:
-            stage_names = ",".join(s.name for s in orchestration_policy.stages)
-            set_output("orchestration_summary", f"staged:{stage_names}:{result.conclusion}")
+            stage_names_csv = ",".join(s.name for s in orchestration_policy.stages)
+            set_output("orchestration_summary", f"staged:{stage_names_csv}:{result.conclusion}")
         set_output("github_token", inputs.github_token)
 
         branch_url, compare_url = branch_urls(ctx, branch_info)
         final_output = result.stdout if result.stdout.strip() else result.stderr
-        update_tracking_comment(
-            api,
-            tracking,
-            final_comment_body(
+        if orchestration_policy is not None:
+            final_body = staged_tracking_comment_body(
+                ctx,
+                run_url=run_link,
+                stage_names=stage_names,
+                stage_results=completed_stage_results,
+                started_at=started_at,
+                final=True,
+                success=result.success,
+                branch_name=branch_info.hermes_branch or branch_info.current_branch,
+                branch_url=branch_url,
+                compare_url=compare_url,
+                plan_url=plan_info.web_url if plan_info else None,
+                push_message=push_info.message or None,
+            )
+        else:
+            final_body = final_comment_body(
                 ctx,
                 success=result.success,
                 started_at=started_at,
@@ -209,8 +320,8 @@ def main() -> int:
                 show_full_output=inputs.show_full_output,
                 plan_url=plan_info.web_url if plan_info else None,
                 push_message=push_info.message or None,
-            ),
-        )
+            )
+        update_tracking_comment(api, tracking, final_body)
         if inputs.display_report:
             append_step_summary(summarize_result(result, branch_info))
         return 0 if result.success else 1
@@ -225,10 +336,25 @@ def main() -> int:
         set_output("conclusion", "failure")
         set_output("github_token", inputs.github_token)
         branch_url, compare_url = branch_urls(ctx, branch_info)
-        update_tracking_comment(
-            api,
-            tracking,
-            final_comment_body(
+        error_output = f"Action failed before completion:\n\n```text\n{truncate(str(exc), 4000)}\n```"
+        if orchestration_policy is not None and stage_names:
+            error_body = staged_tracking_comment_body(
+                ctx,
+                run_url=run_link,
+                stage_names=stage_names,
+                stage_results=completed_stage_results,
+                started_at=started_at,
+                final=True,
+                success=False,
+                branch_name=branch_info.hermes_branch or branch_info.current_branch,
+                branch_url=branch_url,
+                compare_url=compare_url,
+                plan_url=plan_info.web_url if plan_info else None,
+                push_message=push_info.message or None,
+            )
+            error_body += f"\n### Error\n\n{error_output}\n"
+        else:
+            error_body = final_comment_body(
                 ctx,
                 success=False,
                 started_at=started_at,
@@ -236,12 +362,12 @@ def main() -> int:
                 branch_name=branch_info.hermes_branch or branch_info.current_branch,
                 branch_url=branch_url,
                 compare_url=compare_url,
-                output=f"Action failed before completion:\n\n```text\n{truncate(str(exc), 4000)}\n```",
+                output=error_output,
                 show_full_output=True,
                 plan_url=plan_info.web_url if plan_info else None,
                 push_message=push_info.message or None,
-            ),
-        )
+            )
+        update_tracking_comment(api, tracking, error_body)
         if inputs.display_report:
             append_step_summary(summarize_result(result, branch_info))
         return 1

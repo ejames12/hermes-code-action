@@ -156,6 +156,45 @@ class RunStagedTests(unittest.TestCase):
         self.assertEqual(final.conclusion, "failure")
         self.assertIn("implement", final.stdout)
 
+    def test_stage_completion_callback_runs_after_each_completed_stage(self) -> None:
+        policy = self._policy("plan", "implement")
+        events: list[tuple[str, str, list[str]]] = []
+
+        def on_stage_complete(stage: StagePolicy, result: HermesResult, completed: list[tuple[str, HermesResult]]) -> None:
+            events.append((stage.name, result.conclusion, [name for name, _ in completed]))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch(
+                    "hermes_code_action.orchestrator.run_hermes",
+                    side_effect=[_success_result("plan done"), _success_result("impl done")],
+                ):
+                    final = run_staged("base prompt", Inputs(dry_run=True), policy, on_stage_complete=on_stage_complete)
+
+        self.assertTrue(final.success)
+        self.assertEqual(events, [
+            ("plan", "success", ["plan"]),
+            ("implement", "success", ["plan", "implement"]),
+        ])
+
+    def test_stage_results_record_servicing_model(self) -> None:
+        policy = OrchestrationPolicy(stages=[
+            StagePolicy(name="planner", mode="plan", provider="anthropic", model="claude-opus-4.7"),
+        ])
+        events: list[tuple[str, str, bool]] = []
+
+        def on_stage_complete(stage: StagePolicy, result: HermesResult, completed: list[tuple[str, HermesResult]]) -> None:
+            events.append((result.provider, result.model, result.fallback_used))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", return_value=_success_result("plan done")):
+                    final = run_staged("base prompt", Inputs(dry_run=True), policy, on_stage_complete=on_stage_complete)
+
+        self.assertTrue(final.success)
+        self.assertEqual(events, [("anthropic", "claude-opus-4.7", False)])
+        self.assertIn("anthropic / claude-opus-4.7", final.stdout)
+
     def test_retries_claude_throttle_with_secondary_hermes_model(self) -> None:
         policy = self._policy("plan", "implement")
         side_effects = [
@@ -169,10 +208,22 @@ class RunStagedTests(unittest.TestCase):
             hermes_fallback_provider="openrouter",
             hermes_fallback_model="deepseek-ai/DeepSeek-V4-Pro",
         )
+        fallback_events: list[tuple[str, str, bool, str, str]] = []
+
+        def on_stage_complete(stage: StagePolicy, result: HermesResult, completed: list[tuple[str, HermesResult]]) -> None:
+            if stage.name == "implement":
+                fallback_events.append((
+                    result.provider,
+                    result.model,
+                    result.fallback_used,
+                    result.primary_provider,
+                    result.primary_model,
+                ))
+
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
                 with mock.patch("hermes_code_action.orchestrator.run_hermes", side_effect=side_effects) as mocked:
-                    final = run_staged("base prompt", inputs, policy)
+                    final = run_staged("base prompt", inputs, policy, on_stage_complete=on_stage_complete)
         self.assertEqual(mocked.call_count, 3)
         fallback_inputs = mocked.call_args_list[2].args[1]
         self.assertEqual(fallback_inputs.hermes_provider, "openrouter")
@@ -181,6 +232,8 @@ class RunStagedTests(unittest.TestCase):
         self.assertTrue(final.success)
         self.assertIn("Retried with secondary Hermes model", final.stdout)
         self.assertIn("fallback implement done", final.stdout)
+        self.assertIn("openrouter / deepseek-ai/DeepSeek-V4-Pro", final.stdout)
+        self.assertEqual(fallback_events, [("openrouter", "deepseek-ai/DeepSeek-V4-Pro", True, "", "")])
 
     def test_review_stage_fails_if_it_changes_git_state(self) -> None:
         policy = OrchestrationPolicy(stages=[StagePolicy(name="reviewer", mode="review")])

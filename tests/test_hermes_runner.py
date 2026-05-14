@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -40,6 +41,23 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.returncode, 0)
         self.assertTrue(os.path.exists(result.execution_file))
+
+    def test_run_hermes_records_servicing_model(self) -> None:
+        with mock.patch.dict(os.environ, {"RUNNER_TEMP": self._tmpdir()}, clear=False):
+            result = run_hermes(
+                "prompt",
+                Inputs(
+                    dry_run=True,
+                    path_to_hermes_executable="hermes",
+                    hermes_provider="custom:Crusoe-Deepseek-V4",
+                    hermes_model="deepseek-ai/DeepSeek-V4-Pro",
+                ),
+            )
+        self.assertEqual(result.provider, "custom:Crusoe-Deepseek-V4")
+        self.assertEqual(result.model, "deepseek-ai/DeepSeek-V4-Pro")
+        payload = json.loads(Path(result.execution_file).read_text(encoding="utf-8"))
+        self.assertEqual(payload["provider"], "custom:Crusoe-Deepseek-V4")
+        self.assertEqual(payload["model"], "deepseek-ai/DeepSeek-V4-Pro")
 
     def test_run_hermes_passes_tracking_env_but_scrubs_tokens_and_github_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
