@@ -9,6 +9,11 @@ from .config import Inputs
 from .plan import is_plan_request, is_review_request
 
 _VALID_MODES = {"plan", "implement", "review", "adjudicate"}
+_DEFAULT_CLAUDE_CODE_MODELS: dict[str, tuple[str, str]] = {
+    "plan": ("opus", "Read,Bash"),
+    "implement": ("sonnet", "Read,Edit,Write,Bash"),
+    "adjudicate": ("sonnet", "Read,Bash"),
+}
 
 
 @dataclass
@@ -20,11 +25,23 @@ class StagePolicy:
     toolsets: str = ""
     max_turns: str = ""
     extra_args: str = ""
+    claude_code_model: str = ""
+    claude_code_allowed_tools: str = ""
     must_consider: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.mode not in _VALID_MODES:
             raise ValueError(f"Unknown stage mode {self.mode!r}. Must be one of: {sorted(_VALID_MODES)}")
+        if not self.claude_code_model and not self.provider and not self.model:
+            default = _DEFAULT_CLAUDE_CODE_MODELS.get(self.mode)
+            if default:
+                self.claude_code_model = default[0]
+                if not self.claude_code_allowed_tools:
+                    self.claude_code_allowed_tools = default[1]
+        elif self.claude_code_model and not self.claude_code_allowed_tools:
+            default = _DEFAULT_CLAUDE_CODE_MODELS.get(self.mode)
+            if default:
+                self.claude_code_allowed_tools = default[1]
 
 
 @dataclass
@@ -49,6 +66,8 @@ def _parse_stage(raw: dict[str, Any]) -> StagePolicy:
         toolsets=str(raw.get("toolsets", "")),
         max_turns=str(raw.get("max_turns", "")),
         extra_args=str(raw.get("extra_args", "")),
+        claude_code_model=str(raw.get("claude_code_model") or raw.get("claude_model") or ""),
+        claude_code_allowed_tools=str(raw.get("claude_code_allowed_tools") or raw.get("claude_allowed_tools") or ""),
         must_consider=list(raw.get("must_consider") or []),
     )
 

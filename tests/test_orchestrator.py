@@ -77,6 +77,14 @@ class StagedPromptTests(unittest.TestCase):
         prompt = _build_stage_prompt("plan something", stage, {})
         self.assertNotIn("Prior stage outputs", prompt)
 
+    def test_plan_stage_requires_claude_code_opus_without_pasting_transcripts(self) -> None:
+        stage = StagePolicy(name="planner", mode="plan")
+        prompt = _build_stage_prompt("plan something", stage, {})
+        self.assertIn("Required stage executor: Claude Code CLI", prompt)
+        self.assertIn("--model opus", prompt)
+        self.assertIn("--allowedTools Read,Bash", prompt)
+        self.assertIn("Do NOT paste raw Claude Code transcripts", prompt)
+
 
 class StageInputsTests(unittest.TestCase):
     def test_stage_overrides_model_and_provider(self) -> None:
@@ -195,6 +203,22 @@ class RunStagedTests(unittest.TestCase):
         self.assertEqual(events, [("anthropic", "claude-opus-4.7", False)])
         self.assertIn("anthropic / claude-opus-4.7", final.stdout)
 
+    def test_default_planner_reports_claude_code_opus_service(self) -> None:
+        policy = OrchestrationPolicy(stages=[StagePolicy(name="planner", mode="plan")])
+        events: list[tuple[str, str]] = []
+
+        def on_stage_complete(stage: StagePolicy, result: HermesResult, completed: list[tuple[str, HermesResult]]) -> None:
+            events.append((result.provider, result.model))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", return_value=_success_result("plan done")):
+                    final = run_staged("base prompt", Inputs(dry_run=True), policy, on_stage_complete=on_stage_complete)
+
+        self.assertTrue(final.success)
+        self.assertEqual(events, [("Claude Code CLI", "opus")])
+        self.assertIn("Claude Code CLI / opus", final.stdout)
+
     def test_retries_claude_throttle_with_secondary_hermes_model(self) -> None:
         policy = self._policy("plan", "implement")
         side_effects = [
@@ -233,7 +257,7 @@ class RunStagedTests(unittest.TestCase):
         self.assertIn("Retried with secondary Hermes model", final.stdout)
         self.assertIn("fallback implement done", final.stdout)
         self.assertIn("openrouter / deepseek-ai/DeepSeek-V4-Pro", final.stdout)
-        self.assertEqual(fallback_events, [("openrouter", "deepseek-ai/DeepSeek-V4-Pro", True, "", "")])
+        self.assertEqual(fallback_events, [("openrouter", "deepseek-ai/DeepSeek-V4-Pro", True, "Claude Code CLI", "sonnet")])
 
     def test_review_stage_fails_if_it_changes_git_state(self) -> None:
         policy = OrchestrationPolicy(stages=[StagePolicy(name="reviewer", mode="review")])

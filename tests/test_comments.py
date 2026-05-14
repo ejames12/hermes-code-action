@@ -145,6 +145,35 @@ class CommentTests(unittest.TestCase):
         self.assertIn("fallback after Claude throttling", body)
         self.assertIn("primary attempt: `anthropic` / `claude-sonnet-4.5`", body)
 
+    def test_stage_summary_comment_strips_diff_noise_and_stays_compact(self) -> None:
+        noisy_output = """
+┊ review diff
+```diff
+a//tmp/hermes_issue_1193_planner_prompt.txt → b//tmp/hermes_issue_1193_planner_prompt.txt
+@@ -0,0 +1,17 @@
++You are assisting Hermes in the planner stage for GitHub issue #1193.
++Task: inspect the checked-out Django repository and produce a concrete plan.
++Hard constraints:
++- Read-only only.
+...[truncated]...
+```
+"""
+        body = stage_summary_comment_body(
+            self._ctx(),
+            stage_name="planner",
+            stage_mode="plan",
+            result=self._result(stdout=noisy_output, provider="Claude Code CLI", model="opus"),
+            run_url="https://run",
+            stage_number=1,
+            total_stages=1,
+        )
+        self.assertLess(len(body), 900)
+        self.assertNotIn("```", body)
+        self.assertNotIn("@@", body)
+        self.assertNotIn("/tmp/hermes", body)
+        self.assertNotIn("...[truncated]...", body)
+        self.assertIn("GitHub Actions logs", body)
+
 
 if __name__ == "__main__":
     unittest.main()
