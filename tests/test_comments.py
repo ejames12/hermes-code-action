@@ -174,6 +174,44 @@ a//tmp/hermes_issue_1193_planner_prompt.txt → b//tmp/hermes_issue_1193_planner
         self.assertNotIn("...[truncated]...", body)
         self.assertIn("GitHub Actions logs", body)
 
+    def test_plan_stage_summary_uses_plan_content_and_links_plan(self) -> None:
+        noisy_output = """
+a/docs/hermes-plans/issue-1193-replace-the-current-api-polling-with-pub-sub.md → b/docs/hermes-plans/issue-1193-replace-the-current-api-polling-with-pub-sub.md … omitted 312 diff line(s) across 1 additional file(s)/section(s)
+Implemented the plan-only stage for issue #1193. What changed: - Delegated the substantive planning work to Claude Code CLI in print mode with --model opus.
+"""
+        plan_text = """
+# Replace All-In-One polling with Pub/Sub
+
+## Goal
+Replace periodic StreamEvent and LiveResult API polling from All-In-One VMs with Google Cloud Pub/Sub push/pull delivery.
+
+## Proposed architecture
+- Publish StreamEvent and LiveResult updates to dedicated Pub/Sub topics.
+- Add subscriptions for the external ebr_stream_vm consumer.
+- Keep idempotency keys and ack/dead-letter handling explicit for safe rollout.
+
+## Verification
+- Unit-test publishers and payload schemas.
+- Run an integration test with a local Pub/Sub emulator.
+"""
+        body = stage_summary_comment_body(
+            self._ctx(),
+            stage_name="planner",
+            stage_mode="plan",
+            result=self._result(stdout=noisy_output, provider="Claude Code CLI", model="opus"),
+            run_url="https://run",
+            stage_number=1,
+            total_stages=1,
+            plan_url="https://github.example/plan.md",
+            plan_text=plan_text,
+        )
+        self.assertIn("[View full plan](https://github.example/plan.md)", body)
+        self.assertIn("Replace periodic StreamEvent and LiveResult API polling", body)
+        self.assertIn("dedicated Pub/Sub topics", body)
+        self.assertIn("local Pub/Sub emulator", body)
+        self.assertNotIn("omitted 312 diff", body)
+        self.assertNotIn("Delegated the substantive planning work", body)
+
 
 if __name__ == "__main__":
     unittest.main()

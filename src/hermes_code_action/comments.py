@@ -119,6 +119,62 @@ def _clean_stage_summary_text(text: str) -> str:
     return cleaned
 
 
+_PLAN_SECTION_HEADINGS = ("goal", "summary", "context", "proposed architecture", "architecture", "implementation", "verification")
+
+
+def _section_text(markdown: str, heading: str) -> str:
+    pattern = re.compile(rf"^##+\s+{re.escape(heading)}\s*$", re.IGNORECASE | re.MULTILINE)
+    match = pattern.search(markdown)
+    if not match:
+        return ""
+    start = match.end()
+    next_heading = re.search(r"^##+\s+", markdown[start:], re.MULTILINE)
+    end = start + next_heading.start() if next_heading else len(markdown)
+    return markdown[start:end].strip()
+
+
+def _markdown_snippet(text: str, limit: int) -> str:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("```") or line.startswith("#"):
+            continue
+        lines.append(line)
+    snippet = " ".join(lines)
+    snippet = re.sub(r"\s+", " ", snippet).strip()
+    return truncate(snippet, limit, marker=" …")
+
+
+def _plan_summary(plan_text: str, plan_url: str | None, limit: int = 700) -> str:
+    text = _strip_ansi((plan_text or "").strip())
+    if not text:
+        return ""
+
+    bullets: list[str] = []
+    for heading in _PLAN_SECTION_HEADINGS:
+        section = _section_text(text, heading)
+        if not section:
+            continue
+        snippet = _markdown_snippet(section, 210)
+        if snippet:
+            label = heading.title()
+            bullets.append(f"- **{label}:** {snippet}")
+        if len(bullets) >= 3:
+            break
+
+    if not bullets:
+        snippet = _markdown_snippet(text, 500)
+        if snippet:
+            bullets.append(f"- {snippet}")
+    if not bullets:
+        return ""
+
+    body = "\n".join(bullets)
+    if plan_url:
+        body += f"\n\n[View full plan]({plan_url})"
+    return truncate(body, limit, marker=" …")
+
+
 def _stage_summary(result: HermesResult, limit: int = 600) -> str:
     source = (result.stdout or result.stderr) if result.success else (result.stderr or result.stdout)
     text = _strip_ansi((source or "").strip())
@@ -291,10 +347,14 @@ def stage_summary_comment_body(
     assignees: Sequence[str] = (),
     stage_number: int | None = None,
     total_stages: int | None = None,
+    plan_url: str | None = None,
+    plan_text: str | None = None,
 ) -> str:
     icon = "✅" if result.success else "❌"
     ordinal = f"Stage {stage_number}/{total_stages}" if stage_number and total_stages else "Stage complete"
-    summary = _stage_summary(result)
+    summary = _plan_summary(plan_text or "", plan_url) if stage_mode == "plan" and plan_text else ""
+    if not summary:
+        summary = _stage_summary(result)
     body = f"""## {icon} Hermes stage: {stage_name}
 
 **{ordinal}** • **Mode:** `{stage_mode}` • **Status:** `{result.conclusion}` • **Duration:** `{result.duration_seconds:.1f}s` • [View run]({run_url})
