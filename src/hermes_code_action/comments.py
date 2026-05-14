@@ -73,13 +73,62 @@ def _model_label(result: HermesResult, *, markdown: bool = True) -> str:
     return label
 
 
-def _stage_summary(result: HermesResult, limit: int = 1_200) -> str:
+_FULL_STAGE_OUTPUT_NOTE = "Full stage output is available in the GitHub Actions logs."
+_DIFF_NOISE_PATTERNS = (
+    r"^diff --git\b",
+    r"^index [0-9a-f]+\.\.[0-9a-f]+",
+    r"^@@\s",
+    r"^---\s+[ab]/",
+    r"^\+\+\+\s+[ab]/",
+    r"^[ab]//?tmp/",
+    r"^[ab]/tmp/",
+)
+
+
+def _is_diff_noise_line(line: str) -> bool:
+    if not line:
+        return True
+    lower = line.lower()
+    if "[truncated]" in lower or lower == "┊ review diff" or lower.endswith(" review diff"):
+        return True
+    if "/tmp/hermes" in lower or "hermes_issue_" in lower:
+        return True
+    if any(re.search(pattern, line) for pattern in _DIFF_NOISE_PATTERNS):
+        return True
+    # Strip raw unified-diff additions/deletions, but keep normal Markdown bullets.
+    if line.startswith("+") and not line.startswith("++"):
+        return True
+    if line.startswith("-") and not line.startswith("- "):
+        return True
+    return False
+
+
+def _clean_stage_summary_text(text: str) -> str:
+    lines: list[str] = []
+    in_fence = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or _is_diff_noise_line(line):
+            continue
+        lines.append(line)
+    cleaned = " ".join(lines)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _stage_summary(result: HermesResult, limit: int = 600) -> str:
     source = (result.stdout or result.stderr) if result.success else (result.stderr or result.stdout)
     text = _strip_ansi((source or "").strip())
     if not text:
         return "No stage output."
-    text = "\n".join(line.rstrip() for line in text.splitlines() if line.strip())
-    return truncate(text, limit)
+    cleaned = _clean_stage_summary_text(text)
+    if not cleaned:
+        return f"Stage completed. {_FULL_STAGE_OUTPUT_NOTE}"
+    cleaned = cleaned.replace("|", "\\|")
+    return truncate(cleaned, limit, marker=" … See GitHub Actions logs for full output.")
 
 
 def _stage_line(stage_name: str, result: HermesResult | None = None) -> str:
@@ -155,7 +204,7 @@ def _strip_ansi(text: str) -> str:
 
 
 def _attention_reason(stage_mode: str, result: HermesResult, summary: str) -> str | None:
-    text = f"{result.stdout}\n{result.stderr}\n{summary}".lower()
+    text = f"{result.stdout}\n{result.stderr}\n{summary}".lower() if not result.success else summary.lower()
     if not result.success:
         return "this stage did not complete successfully."
     if any(re.search(pattern, text) for pattern in _NO_HUMAN_ATTENTION_PATTERNS):

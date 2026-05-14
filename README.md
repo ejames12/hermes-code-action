@@ -94,7 +94,7 @@ Plan-mode runs are validated before publishing: only the plan file and directly 
 
 ## Staged multi-model orchestration
 
-By default the action runs a single Hermes invocation. Set `orchestration_mode: staged` to run a Phase 2 pipeline where each stage can use a different provider/model/toolset:
+By default the action runs a single Hermes invocation. Set `orchestration_mode: staged` to run a Phase 2 pipeline where each stage can use a different Claude Code model or Hermes provider/model/toolset:
 
 1. **Planner** — creates the plan or design context.
 2. **Implementer** — edits code, runs checks, and commits intended changes.
@@ -131,15 +131,15 @@ workflows:
     stages:
       - name: planner
         mode: plan
-        provider: anthropic
-        model: claude-opus-4.7
+        claude_code_model: opus
+        claude_code_allowed_tools: Read,Bash
         toolsets: file,terminal,web
         max_turns: 60
 
       - name: implementer
         mode: implement
-        provider: anthropic
-        model: claude-sonnet-4.5
+        claude_code_model: sonnet
+        claude_code_allowed_tools: Read,Edit,Write,Bash
         toolsets: file,terminal
         max_turns: 90
 
@@ -152,15 +152,15 @@ workflows:
 
       - name: adjudicator
         mode: adjudicate
-        provider: anthropic
-        model: claude-sonnet-4.5
+        claude_code_model: sonnet
+        claude_code_allowed_tools: Read,Bash
         toolsets: file,terminal
         max_turns: 30
         must_consider:
           - reviewer
 ```
 
-Policy files may be JSON or YAML. YAML support uses PyYAML when available; JSON works with the Python stdlib. If `orchestration_mode: staged` is set and no policy file is provided/found, the action uses a safe built-in four-stage default with the normal `hermes_provider`, `hermes_model`, `hermes_toolsets`, and `hermes_max_turns` as fallbacks.
+Use `claude_code_model` for stages that should delegate the substantive work through Claude Code CLI (`opus` for planning, `sonnet` for implementation/adjudication). Use `provider`/`model` for stages that should run directly on Hermes's configured harness, such as the reviewer stage above. Policy files may be JSON or YAML. YAML support uses PyYAML when available; JSON works with the Python stdlib. If `orchestration_mode: staged` is set and no policy file is provided/found, the action uses a safe built-in four-stage default: planner via Claude Code `opus`, implementer via Claude Code `sonnet`, reviewer via Hermes's default model/harness, and adjudicator via Claude Code `sonnet`.
 
 When a staged phase that normally delegates to Claude Code CLI fails with output that looks like Claude/Anthropic throttling (`rate limit`, `429`, `too many requests`, `overloaded`, etc.), the action can retry that phase once with a secondary Hermes model. Configure `hermes_fallback_provider` and/or `hermes_fallback_model`; fallback retries intentionally do not load `hermes_args: -s claude-code` unless you explicitly set `hermes_fallback_args`.
 

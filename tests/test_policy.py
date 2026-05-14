@@ -72,7 +72,43 @@ class PolicyTests(unittest.TestCase):
         assert policy is not None
         self.assertEqual([stage.name for stage in policy.stages], ["planner", "implementer", "reviewer", "adjudicator"])
         self.assertEqual(policy.stages[0].mode, "plan")
+        self.assertEqual(policy.stages[0].claude_code_model, "opus")
+        self.assertEqual(policy.stages[1].claude_code_model, "sonnet")
+        self.assertEqual(policy.stages[2].claude_code_model, "")
+        self.assertEqual(policy.stages[3].claude_code_model, "sonnet")
         self.assertEqual(policy.stages[-1].mode, "adjudicate")
+
+    def test_policy_stage_without_explicit_model_uses_claude_code_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy_path = Path(tmp, "code-action.json")
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "workflows": {
+                            "default": {
+                                "stages": [
+                                    {"name": "planner", "mode": "plan"},
+                                    {"name": "reviewer", "mode": "review"},
+                                ]
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            policy = load_orchestration_policy(
+                Inputs(orchestration_mode="staged", orchestration_policy=str(policy_path), workflow="default")
+            )
+        self.assertIsNotNone(policy)
+        assert policy is not None
+        self.assertEqual(policy.stages[0].claude_code_model, "opus")
+        self.assertEqual(policy.stages[1].claude_code_model, "")
+
+    def test_default_claude_code_model_preserves_custom_allowed_tools(self) -> None:
+        stage = StagePolicy(name="planner", mode="plan", claude_code_allowed_tools="Read,Grep")
+        self.assertEqual(stage.claude_code_model, "opus")
+        self.assertEqual(stage.claude_code_allowed_tools, "Read,Grep")
 
     def test_single_mode_disables_policy(self) -> None:
         self.assertIsNone(load_orchestration_policy(Inputs(orchestration_mode="single")))

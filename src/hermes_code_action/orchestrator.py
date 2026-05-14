@@ -52,9 +52,46 @@ _CLAUDE_THROTTLE_MARKERS = (
 StageCompleteCallback = Callable[[StagePolicy, HermesResult, list[tuple[str, HermesResult]]], None]
 
 
+def _stage_executor_notice(stage: StagePolicy) -> str:
+    """Return stage-specific executor instructions for Hermes's inner run."""
+    if not stage.claude_code_model:
+        if stage.mode == "review":
+            return (
+                "## Stage executor\n"
+                "Use Hermes's configured default model and tool harness for this review stage. "
+                "Do NOT invoke Claude Code CLI for review-only requests.\n\n"
+            )
+        return ""
+
+    allowed_tools = stage.claude_code_allowed_tools or "Read,Bash"
+    max_turns = stage.max_turns or "20"
+    mode_note = ""
+    if stage.mode == "plan":
+        mode_note = (
+            "For plan-only requests, use Claude Code to inspect the repository and draft the plan with read-only tools. "
+            "If the base prompt requires a plan file, synthesize Claude's plan into that file yourself and commit only the allowed plan artifacts.\n"
+        )
+    elif stage.mode == "implement":
+        mode_note = "Use Claude Code for the implementation work, local checks, and any local commits the base prompt permits.\n"
+    elif stage.mode == "adjudicate":
+        mode_note = "Use Claude Code for read-only adjudication of prior stage output; do not edit files or commit.\n"
+
+    return f"""## Required stage executor: Claude Code CLI
+You MUST delegate the substantive `{stage.mode}` stage work to Claude Code CLI in print mode before producing this stage's result. Use this command shape and preserve the explicit model flag:
+
+`claude -p "<stage task>" --model {stage.claude_code_model} --max-turns {max_turns} --allowedTools {allowed_tools}`
+
+Do not use `claude --bare`; OAuth auth is provided through Claude Code CLI and bare mode may require `ANTHROPIC_API_KEY`. Do not let Claude Code push, merge, approve, or create PRs.
+{mode_note}If Claude Code CLI is unavailable or fails, report that blocker instead of silently completing the stage with Hermes's default model.
+
+Do NOT paste raw Claude Code transcripts, diffs, full prompts, or code blocks into your final answer. Return only a concise human summary; full details belong in GitHub Actions logs or artifacts.
+
+"""
+
+
 def _build_stage_prompt(base_prompt: str, stage: StagePolicy, prior_outputs: dict[str, str]) -> str:
     preamble = _STAGE_PREAMBLES.get(stage.mode, "")
-    parts = [preamble, base_prompt]
+    parts = [preamble, _stage_executor_notice(stage), base_prompt]
 
     if prior_outputs:
         parts.append(_PRIOR_OUTPUT_HEADER)
@@ -111,10 +148,14 @@ def _annotate_model_info(
     result: HermesResult,
     inputs: Inputs,
     *,
+    stage: StagePolicy | None = None,
     fallback_used: bool = False,
     primary: HermesResult | None = None,
 ) -> HermesResult:
-    provider, model = effective_model_info(inputs)
+    if stage is not None and stage.claude_code_model:
+        provider, model = "Claude Code CLI", stage.claude_code_model
+    else:
+        provider, model = effective_model_info(inputs)
     return dataclasses.replace(
         result,
         provider=result.provider or provider,
@@ -294,7 +335,7 @@ def run_staged(
         stage_prompt = _build_stage_prompt(base_prompt, stage, prior_outputs)
         stage_inputs = _stage_inputs(inputs, stage)
         read_only_before = _git_state() if stage.mode in {"review", "adjudicate"} else None
-        result = _annotate_model_info(run_hermes(stage_prompt, stage_inputs, extra_env=extra_env), stage_inputs)
+        result = _annotate_model_info(run_hermes(stage_prompt, stage_inputs, extra_env=extra_env), stage_inputs, stage=stage)
         fallback_inputs = _fallback_stage_inputs(inputs, stage_inputs)
         if not result.success and fallback_inputs is not None and _looks_like_claude_throttle(result):
             notice(
