@@ -28,7 +28,7 @@ Implemented:
 - Initial, live milestone, and final tracking-comment updates.
 - `@hermes plan ...` mode that writes a Markdown implementation plan under `docs/hermes-plans/` and returns a GitHub link.
 - Wrapper-owned branch publishing with guardrails that refuse direct pushes to `main`, `master`, the repository default branch, or the PR base branch.
-- Optional staged multi-model orchestration: planner, implementer, reviewer, and adjudicator Hermes runs with per-stage provider/model/toolset overrides.
+- Optional staged multi-model orchestration: planner, implementer, reviewer, and adjudicator Hermes runs with per-stage provider/model/toolset overrides plus per-stage summary comments.
 - Hermes CLI execution through `hermes chat -q ...`.
 - Action outputs compatible with the Claude Code Action shape where practical.
 - Python stdlib only: no npm/bun/runtime dependency for the action code itself.
@@ -102,6 +102,13 @@ By default the action runs a single Hermes invocation. Set `orchestration_mode: 
 4. **Adjudicator** — final decision. It receives prior stage outputs and must explicitly consider configured reviewer findings.
 
 The wrapper still owns publishing: Hermes stages must not push, and the action refuses to publish protected branches.
+
+For GitHub tag-mode runs, staged orchestration uses two comment streams:
+
+- one tracking comment is created up front with the planned stage checklist and is updated as stages complete;
+- one new issue/PR comment is posted after each completed stage with a clean status, duration, servicing provider/model, and concise stage summary.
+
+If a stage fails or its output suggests human attention is needed, the stage summary comment mentions the issue/PR assignees so a human can review the blocker or decision point.
 
 Example workflow inputs:
 
