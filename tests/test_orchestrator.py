@@ -125,13 +125,19 @@ class StageInputsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
                 with mock.patch("hermes_code_action.orchestrator.run_hermes", return_value=_success_result("done")) as mocked:
-                    run_staged("base prompt", Inputs(dry_run=True, hermes_args="--profile coding -s claude-code"), policy)
+                    run_staged(
+                        "base prompt",
+                        Inputs(dry_run=True, hermes_args="--profile coding -s claude-code"),
+                        policy,
+                        session_title="issue #42: Fix login redirect",
+                    )
 
         self.assertEqual(mocked.call_count, 4)
         for call in mocked.call_args_list:
             stage_inputs = call.args[1]
             self.assertEqual(stage_inputs.hermes_extra_args.count("--profile"), 1)
             self.assertIn("coding", stage_inputs.hermes_extra_args)
+            self.assertEqual(call.kwargs.get("session_title"), "issue #42: Fix login redirect")
 
     def test_fallback_inputs_use_secondary_model_and_drop_claude_skill(self) -> None:
         base = Inputs(

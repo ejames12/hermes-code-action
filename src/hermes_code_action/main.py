@@ -41,6 +41,7 @@ from .plan import (
 from .policy import StagePolicy, load_orchestration_policy
 from .prompt import build_prompt, collect_github_data
 from .security import validate_actor
+from .session_titles import session_title_for_context
 from .tracking import TrackingCommentServer, TrackingTool, start_tracking_tool
 from .triggers import detect_trigger
 from .util import append_step_summary, error, mask, notice, run_url, set_output, truncate, warning, workspace
@@ -262,6 +263,9 @@ def main() -> int:
         prompt_file = write_prompt_file(prompt)
         set_output("prompt_file", prompt_file)
         notice(f"Prompt written to {prompt_file} ({len(prompt)} chars)")
+        session_title = session_title_for_context(ctx)
+        if session_title:
+            notice(f"Hermes session title: {session_title}")
 
         if orchestration_policy is not None:
             notice(f"Staged orchestration active: {len(orchestration_policy.stages)} stages")
@@ -289,9 +293,10 @@ def main() -> int:
                 orchestration_policy,
                 extra_env=tracking_tool.env if tracking_tool else None,
                 on_stage_complete=on_stage_complete,
+                session_title=session_title,
             )
         else:
-            result = run_hermes(prompt, inputs, extra_env=tracking_tool.env if tracking_tool else None)
+            result = run_hermes(prompt, inputs, extra_env=tracking_tool.env if tracking_tool else None, session_title=session_title)
         if tracking_server is not None:
             tracking_server.stop()
             tracking_server = None

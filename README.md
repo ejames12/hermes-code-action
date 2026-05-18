@@ -164,6 +164,8 @@ Use `claude_code_model` for stages that should delegate the substantive work thr
 
 Global `hermes_args` are applied to every staged Hermes invocation. Stage `extra_args` are appended to the global args; if both configure the same flag (for example `-s` or `--profile`), the stage-specific flag takes precedence and the duplicate global flag/value is removed for that stage.
 
+For issue or pull request triggers, Hermes sessions are titled from the GitHub entity using `issue #123: Title` or `pr #123: Title`. After each Hermes invocation completes, the action renames the exact `session_id` reported by Hermes, preserving any configured `--profile` so the correct session database is updated. Workflow-dispatch/agent-mode runs without an issue or PR title remain untitled unless Hermes auto-title generation names them.
+
 When a staged phase that normally delegates to Claude Code CLI fails with output that looks like Claude/Anthropic throttling (`rate limit`, `429`, `too many requests`, `overloaded`, etc.), the action can retry that phase once with a secondary Hermes model. Configure `hermes_fallback_provider` and/or `hermes_fallback_model`; fallback retries intentionally do not load `hermes_args: -s claude-code` unless you explicitly set `hermes_fallback_args`.
 
 For the Opus → Sonnet → GPT → Sonnet pattern: put Opus on `planner`, Sonnet on `implementer`, GPT on `reviewer`, and Sonnet on `adjudicator` with `must_consider: [reviewer]`. The adjudicator prompt requires triaging GPT's findings; the wrapper validates tests/branch rules and humans still approve merges.

@@ -357,6 +357,7 @@ def run_staged(
     *,
     extra_env: dict[str, str] | None = None,
     on_stage_complete: StageCompleteCallback | None = None,
+    session_title: str = "",
 ) -> HermesResult:
     """Run multiple Hermes invocations in stage order per the policy."""
     stage_results: list[tuple[str, HermesResult]] = []
@@ -370,7 +371,11 @@ def run_staged(
         stage_prompt = _build_stage_prompt(base_prompt, stage, prior_outputs)
         stage_inputs = _stage_inputs(inputs, stage)
         read_only_before = _git_state() if stage.mode in {"review", "adjudicate"} else None
-        result = _annotate_model_info(run_hermes(stage_prompt, stage_inputs, extra_env=extra_env), stage_inputs, stage=stage)
+        result = _annotate_model_info(
+            run_hermes(stage_prompt, stage_inputs, extra_env=extra_env, session_title=session_title),
+            stage_inputs,
+            stage=stage,
+        )
         fallback_inputs = _fallback_stage_inputs(inputs, stage_inputs)
         if not result.success and fallback_inputs is not None and _looks_like_claude_throttle(result):
             notice(
@@ -379,7 +384,7 @@ def run_staged(
             )
             fallback_prompt = _build_fallback_prompt(stage_prompt, result)
             fallback = _annotate_model_info(
-                run_hermes(fallback_prompt, fallback_inputs, extra_env=extra_env),
+                run_hermes(fallback_prompt, fallback_inputs, extra_env=extra_env, session_title=session_title),
                 fallback_inputs,
                 fallback_used=True,
                 primary=result,
