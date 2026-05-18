@@ -9,6 +9,7 @@ import subprocess
 import time
 
 from .config import Inputs
+from .session_renamer import rename_session
 from .util import notice, truncate, workspace
 
 
@@ -63,7 +64,12 @@ def find_hermes_executable(inputs: Inputs) -> str:
     raise RuntimeError("Could not find Hermes executable. Install Hermes or set path_to_hermes_executable.")
 
 
-def build_hermes_command(executable: str, prompt: str, inputs: Inputs) -> list[str]:
+def build_hermes_command(executable: str, prompt: str, inputs: Inputs, session_title: str = "") -> list[str]:
+    # session_title is applied after the run using the explicit session_id that
+    # Hermes prints to stderr. Do not inject /title into the non-interactive
+    # prompt: `hermes chat -q ... -Q` sends the prompt straight to the model and
+    # does not process slash commands first.
+    _ = session_title
     args = [executable, "chat", "-q", prompt, "-Q", "--source", inputs.hermes_source]
     if inputs.hermes_yolo:
         args.append("--yolo")
@@ -98,12 +104,17 @@ def _parse_session_id(output: str) -> str | None:
     return None
 
 
-def run_hermes(prompt: str, inputs: Inputs, extra_env: dict[str, str] | None = None) -> HermesResult:
+def run_hermes(
+    prompt: str,
+    inputs: Inputs,
+    extra_env: dict[str, str] | None = None,
+    session_title: str = "",
+) -> HermesResult:
     if inputs.dry_run:
         executable = inputs.path_to_hermes_executable or shutil.which("hermes") or "hermes"
     else:
         executable = find_hermes_executable(inputs)
-    command = build_hermes_command(executable, prompt, inputs)
+    command = build_hermes_command(executable, prompt, inputs, session_title=session_title)
     notice("Running Hermes: " + " ".join(_scrub_env_for_log(command)))
 
     env = os.environ.copy()
@@ -163,6 +174,9 @@ def run_hermes(prompt: str, inputs: Inputs, extra_env: dict[str, str] | None = N
     if stderr:
         notice("Hermes stderr:\n" + (stderr if inputs.show_full_output else truncate(stderr, 8000)))
 
+    session_id = _parse_session_id(stdout + "\n" + stderr)
+    rename_session(executable, inputs, session_id, session_title)
+
     provider, model = effective_model_info(inputs)
     return HermesResult(
         conclusion=conclusion,
@@ -171,7 +185,7 @@ def run_hermes(prompt: str, inputs: Inputs, extra_env: dict[str, str] | None = N
         returncode=returncode,
         execution_file=str(execution_file),
         duration_seconds=duration,
-        session_id=_parse_session_id(stdout + "\n" + stderr),
+        session_id=session_id,
         provider=provider,
         model=model,
         hermes_args=inputs.hermes_args,
