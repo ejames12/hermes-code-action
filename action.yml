@@ -108,11 +108,11 @@ inputs:
     required: false
     default: ""
   hermes_fallback_model:
-    description: "Optional secondary Hermes model used to retry a staged phase when Claude Code CLI appears throttled/rate-limited."
+    description: "Optional secondary Hermes model used to retry a staged phase when Claude Code CLI appears throttled/rate-limited. Empty uses Hermes's configured default model."
     required: false
     default: ""
   hermes_fallback_provider:
-    description: "Optional secondary Hermes provider used with hermes_fallback_model."
+    description: "Optional secondary Hermes provider used with hermes_fallback_model. Empty uses Hermes's configured default provider."
     required: false
     default: ""
   hermes_fallback_args:

@@ -157,10 +157,12 @@ def _stage_inputs(base_inputs: Inputs, stage: StagePolicy) -> Inputs:
     return dataclasses.replace(base_inputs, **overrides)
 
 
-def _fallback_stage_inputs(base_inputs: Inputs, stage_inputs: Inputs) -> Inputs | None:
-    """Return Inputs for a secondary Hermes retry, or None if not configured."""
-    if not (base_inputs.hermes_fallback_provider or base_inputs.hermes_fallback_model):
-        return None
+def _fallback_stage_inputs(base_inputs: Inputs, stage_inputs: Inputs) -> Inputs:
+    """Return Inputs for a Hermes retry after Claude throttling.
+
+    If no explicit fallback provider/model is configured, clear the stage's
+    provider/model so Hermes uses the profile's configured default model.
+    """
     return dataclasses.replace(
         stage_inputs,
         hermes_provider=base_inputs.hermes_fallback_provider,
@@ -220,14 +222,18 @@ def _model_summary(result: HermesResult) -> str:
     return label
 
 
-def _build_fallback_prompt(stage_prompt: str, failed_result: HermesResult) -> str:
+def _build_fallback_prompt(stage_prompt: str, failed_result: HermesResult, fallback_inputs: Inputs) -> str:
     failure_summary = truncate((failed_result.stderr or failed_result.stdout or "").strip(), 4_000)
+    if fallback_inputs.hermes_provider or fallback_inputs.hermes_model:
+        retry_target = "Hermes's configured secondary provider/model"
+    else:
+        retry_target = "Hermes's configured default model"
     return f"""{stage_prompt}
 
 ---
 ## Secondary Hermes fallback
 
-The previous attempt for this stage appears to have failed because Claude Code CLI was throttled/rate-limited. Retry this stage using Hermes's configured secondary provider/model.
+The previous attempt for this stage appears to have failed because Claude Code CLI was throttled/rate-limited. Retry this stage using {retry_target}.
 
 Do NOT invoke Claude Code CLI, `claude`, or the `claude-code` skill during this fallback attempt. Use Hermes's own model and available tools directly. Preserve the same stage role, safety constraints, git restrictions, and output expectations.
 
@@ -237,9 +243,10 @@ Previous failure summary:
 
 
 def _fallback_result(primary: HermesResult, fallback: HermesResult) -> HermesResult:
+    retry_label = "secondary Hermes model" if (fallback.provider or fallback.model) else "Hermes default model"
     stdout = (
         (primary.stdout or primary.stderr).strip()
-        + "\n\n---\nRetried with secondary Hermes model after Claude Code throttling.\n\n"
+        + f"\n\n---\nRetried with {retry_label} after Claude Code throttling.\n\n"
         + fallback.stdout.strip()
     ).strip()
     stderr = fallback.stderr
@@ -377,12 +384,12 @@ def run_staged(
             stage=stage,
         )
         fallback_inputs = _fallback_stage_inputs(inputs, stage_inputs)
-        if not result.success and fallback_inputs is not None and _looks_like_claude_throttle(result):
+        if stage.claude_code_model and _looks_like_claude_throttle(result):
             notice(
                 f"[orchestrator] Stage {stage.name!r} appears Claude-throttled; "
-                "retrying with secondary Hermes model."
+                "retrying with Hermes fallback/default model."
             )
-            fallback_prompt = _build_fallback_prompt(stage_prompt, result)
+            fallback_prompt = _build_fallback_prompt(stage_prompt, result, fallback_inputs)
             fallback = _annotate_model_info(
                 run_hermes(fallback_prompt, fallback_inputs, extra_env=extra_env, session_title=session_title),
                 fallback_inputs,
