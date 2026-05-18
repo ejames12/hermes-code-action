@@ -7,6 +7,7 @@ import time
 
 from .github_context import GitHubContext
 from .hermes_runner import HermesResult
+from .config import parse_extra_args
 from .util import truncate
 
 
@@ -46,6 +47,21 @@ class TrackingComment:
     id: int | None
     html_url: str | None
     kind: str = "issue"
+
+
+def _arg_value(args: list[str], flag: str) -> str:
+    for index, arg in enumerate(args):
+        if arg == flag and index + 1 < len(args):
+            return args[index + 1]
+        prefix = f"{flag}="
+        if arg.startswith(prefix):
+            return arg[len(prefix):]
+    return ""
+
+
+def hermes_profile_from_args(hermes_args: str) -> str:
+    """Return the Hermes --profile value from a shell-style args string, if present."""
+    return _arg_value(parse_extra_args(hermes_args), "--profile")
 
 
 def _model_label(result: HermesResult, *, markdown: bool = True) -> str:
@@ -349,18 +365,21 @@ def stage_summary_comment_body(
     total_stages: int | None = None,
     plan_url: str | None = None,
     plan_text: str | None = None,
+    hermes_profile: str = "",
 ) -> str:
     icon = "✅" if result.success else "❌"
     ordinal = f"Stage {stage_number}/{total_stages}" if stage_number and total_stages else "Stage complete"
     summary = _plan_summary(plan_text or "", plan_url) if stage_mode == "plan" and plan_text else ""
     if not summary:
         summary = _stage_summary(result)
+    hermes_profile = hermes_profile or hermes_profile_from_args(result.hermes_args)
+    profile_line = f"\n**Hermes profile:** `{hermes_profile}`\n" if hermes_profile else ""
     body = f"""## {icon} Hermes stage: {stage_name}
 
 **{ordinal}** • **Mode:** `{stage_mode}` • **Status:** `{result.conclusion}` • **Duration:** `{result.duration_seconds:.1f}s` • [View run]({run_url})
 
 **Serviced by:** {_model_label(result)}
-
+{profile_line}
 ### Summary
 
 {summary}

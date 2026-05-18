@@ -4,6 +4,7 @@ import dataclasses
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import time
 from typing import Callable
@@ -106,8 +107,40 @@ def _build_stage_prompt(base_prompt: str, stage: StagePolicy, prior_outputs: dic
     return "".join(parts)
 
 
+def _args_contain_flag(args: list[str], flag: str) -> bool:
+    """Return True when args contain `flag` as `flag value` or `flag=value`."""
+    prefix = f"{flag}="
+    return any(arg == flag or arg.startswith(prefix) for arg in args)
+
+
+def _merge_stage_extra_args(global_args: str, stage_args: str) -> str:
+    """Merge global and stage-specific Hermes args with stage flags taking precedence."""
+    if not stage_args.strip():
+        return global_args
+    global_tokens = shlex.split(global_args) if global_args.strip() else []
+    stage_tokens = shlex.split(stage_args)
+    filtered_global: list[str] = []
+    index = 0
+    while index < len(global_tokens):
+        token = global_tokens[index]
+        if token.startswith("-") and _args_contain_flag(stage_tokens, token):
+            if "=" not in token and index + 1 < len(global_tokens) and not global_tokens[index + 1].startswith("-"):
+                index += 2
+            else:
+                index += 1
+            continue
+        filtered_global.append(token)
+        index += 1
+    return " ".join(shlex.quote(arg) for arg in [*filtered_global, *stage_tokens])
+
+
 def _stage_inputs(base_inputs: Inputs, stage: StagePolicy) -> Inputs:
-    """Build an Inputs copy with stage-specific overrides."""
+    """Build an Inputs copy with stage-specific overrides.
+
+    Stage-specific `extra_args` extend global `hermes_args`. If both set the same flag
+    (for example `-s` or `--profile`), the stage-specific flag wins to avoid duplicate
+    skill/profile args in the final Hermes command.
+    """
     overrides: dict[str, object] = {}
     if stage.provider:
         overrides["hermes_provider"] = stage.provider
@@ -118,7 +151,7 @@ def _stage_inputs(base_inputs: Inputs, stage: StagePolicy) -> Inputs:
     if stage.max_turns:
         overrides["hermes_max_turns"] = stage.max_turns
     if stage.extra_args:
-        overrides["hermes_args"] = stage.extra_args
+        overrides["hermes_args"] = _merge_stage_extra_args(base_inputs.hermes_args, stage.extra_args)
     if not overrides:
         return base_inputs
     return dataclasses.replace(base_inputs, **overrides)
@@ -223,6 +256,7 @@ def _fallback_result(primary: HermesResult, fallback: HermesResult) -> HermesRes
         fallback_used=True,
         primary_provider=primary.provider,
         primary_model=primary.model,
+        hermes_args=fallback.hermes_args,
     )
 
 
@@ -272,6 +306,7 @@ def _fail_read_only_stage(stage: StagePolicy, result: HermesResult) -> HermesRes
         fallback_used=result.fallback_used,
         primary_provider=result.primary_provider,
         primary_model=result.primary_model,
+        hermes_args=result.hermes_args,
     )
 
 

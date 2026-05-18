@@ -124,6 +124,49 @@ class CommentTests(unittest.TestCase):
         )
         self.assertIn("**Serviced by:** `anthropic` / `claude-opus-4.7`", body)
 
+    def test_stage_summary_comment_includes_hermes_profile_from_result_args(self) -> None:
+        body = stage_summary_comment_body(
+            self._ctx(),
+            stage_name="planner",
+            stage_mode="plan",
+            result=self._result(
+                stdout="Plan created.",
+                provider="Claude Code CLI",
+                model="opus",
+                hermes_args="--profile coding -s claude-code",
+            ),
+            run_url="https://run",
+            stage_number=1,
+            total_stages=4,
+        )
+        self.assertIn("**Hermes profile:** `coding`", body)
+
+    def test_stage_summary_comment_uses_explicit_hermes_profile(self) -> None:
+        body = stage_summary_comment_body(
+            self._ctx(),
+            stage_name="planner",
+            stage_mode="plan",
+            result=self._result(stdout="Plan created.", provider="Claude Code CLI", model="opus"),
+            run_url="https://run",
+            stage_number=1,
+            total_stages=4,
+            hermes_profile="coding",
+        )
+        self.assertIn("**Hermes profile:** `coding`", body)
+
+    def test_stage_summary_comment_omits_blank_hermes_profile(self) -> None:
+        body = stage_summary_comment_body(
+            self._ctx(),
+            stage_name="planner",
+            stage_mode="plan",
+            result=self._result(stdout="Plan created."),
+            run_url="https://run",
+            stage_number=1,
+            total_stages=4,
+            hermes_profile="",
+        )
+        self.assertNotIn("**Hermes profile:**", body)
+
     def test_stage_summary_comment_marks_fallback_model(self) -> None:
         body = stage_summary_comment_body(
             self._ctx(),

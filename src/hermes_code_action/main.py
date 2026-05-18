@@ -22,6 +22,7 @@ from .comments import (
     initial_comment_body,
     stage_summary_comment_body,
     staged_tracking_comment_body,
+    hermes_profile_from_args,
 )
 from .config import load_inputs
 from .github_api import GitHubApi
@@ -138,6 +139,7 @@ def _post_stage_update(
                 total_stages=len(stage_names),
                 plan_url=plan_info.web_url if plan_info else None,
                 plan_text=_read_plan_text(plan_info) if stage.mode == "plan" else None,
+                hermes_profile=hermes_profile_from_args(result.hermes_args),
             ),
         )
     except Exception as exc:  # noqa: BLE001
