@@ -170,6 +170,7 @@ class StageInputsTests(unittest.TestCase):
 
     def test_claude_throttle_detection(self) -> None:
         self.assertTrue(_looks_like_claude_throttle(_failure_result(stderr="Claude Code API rate limit 429")))
+        self.assertTrue(_looks_like_claude_throttle(_success_result(stdout="Claude Code exited with: You've hit your limit · resets 4:50am (UTC)")))
         self.assertFalse(_looks_like_claude_throttle(_failure_result(stderr="unit tests failed")))
 
 
