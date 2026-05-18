@@ -26,6 +26,7 @@ class HermesResult:
     fallback_used: bool = False
     primary_provider: str = ""
     primary_model: str = ""
+    hermes_args: str = ""
 
     @property
     def success(self) -> bool:
@@ -173,4 +174,5 @@ def run_hermes(prompt: str, inputs: Inputs, extra_env: dict[str, str] | None = N
         session_id=_parse_session_id(stdout + "\n" + stderr),
         provider=provider,
         model=model,
+        hermes_args=inputs.hermes_args,
     )

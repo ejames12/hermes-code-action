@@ -109,6 +109,30 @@ class StageInputsTests(unittest.TestCase):
         self.assertEqual(result.hermes_toolsets, "file")
         self.assertEqual(result.hermes_max_turns, "10")
 
+    def test_stage_extra_args_extend_global_args_and_override_same_flags(self) -> None:
+        base = Inputs(hermes_args="--profile coding -s claude-code --color never")
+        stage = StagePolicy(name="s", mode="plan", extra_args="-s custom-skill --debug")
+        result = _stage_inputs(base, stage)
+        self.assertEqual(result.hermes_extra_args, ["--profile", "coding", "--color", "never", "-s", "custom-skill", "--debug"])
+
+    def test_staged_run_preserves_global_hermes_profile_for_every_stage(self) -> None:
+        policy = OrchestrationPolicy(stages=[
+            StagePolicy(name="planner", mode="plan", max_turns="60", extra_args="-s claude-code"),
+            StagePolicy(name="implementer", mode="implement", max_turns="90", extra_args="-s claude-code"),
+            StagePolicy(name="reviewer", mode="review", max_turns="40"),
+            StagePolicy(name="adjudicator", mode="adjudicate", max_turns="40", extra_args="-s claude-code"),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", return_value=_success_result("done")) as mocked:
+                    run_staged("base prompt", Inputs(dry_run=True, hermes_args="--profile coding -s claude-code"), policy)
+
+        self.assertEqual(mocked.call_count, 4)
+        for call in mocked.call_args_list:
+            stage_inputs = call.args[1]
+            self.assertEqual(stage_inputs.hermes_extra_args.count("--profile"), 1)
+            self.assertIn("coding", stage_inputs.hermes_extra_args)
+
     def test_fallback_inputs_use_secondary_model_and_drop_claude_skill(self) -> None:
         base = Inputs(
             hermes_provider="openai-codex",

@@ -162,6 +162,8 @@ workflows:
 
 Use `claude_code_model` for stages that should delegate the substantive work through Claude Code CLI (`opus` for planning, `sonnet` for implementation/adjudication). Use `provider`/`model` for stages that should run directly on Hermes's configured harness, such as the reviewer stage above. Policy files may be JSON or YAML. YAML support uses PyYAML when available; JSON works with the Python stdlib. If `orchestration_mode: staged` is set and no policy file is provided/found, the action uses a safe built-in four-stage default: planner via Claude Code `opus`, implementer via Claude Code `sonnet`, reviewer via Hermes's default model/harness, and adjudicator via Claude Code `sonnet`.
 
+Global `hermes_args` are applied to every staged Hermes invocation. Stage `extra_args` are appended to the global args; if both configure the same flag (for example `-s` or `--profile`), the stage-specific flag takes precedence and the duplicate global flag/value is removed for that stage.
+
 When a staged phase that normally delegates to Claude Code CLI fails with output that looks like Claude/Anthropic throttling (`rate limit`, `429`, `too many requests`, `overloaded`, etc.), the action can retry that phase once with a secondary Hermes model. Configure `hermes_fallback_provider` and/or `hermes_fallback_model`; fallback retries intentionally do not load `hermes_args: -s claude-code` unless you explicitly set `hermes_fallback_args`.
 
 For the Opus → Sonnet → GPT → Sonnet pattern: put Opus on `planner`, Sonnet on `implementer`, GPT on `reviewer`, and Sonnet on `adjudicator` with `must_consider: [reviewer]`. The adjudicator prompt requires triaging GPT's findings; the wrapper validates tests/branch rules and humans still approve merges.

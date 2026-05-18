@@ -42,6 +42,14 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertTrue(os.path.exists(result.execution_file))
 
+    def test_run_hermes_records_hermes_args_for_profile_reporting(self) -> None:
+        with mock.patch.dict(os.environ, {"RUNNER_TEMP": self._tmpdir()}, clear=False):
+            result = run_hermes(
+                "prompt",
+                Inputs(dry_run=True, path_to_hermes_executable="hermes", hermes_args="--profile coding -s claude-code"),
+            )
+        self.assertEqual(result.hermes_args, "--profile coding -s claude-code")
+
     def test_run_hermes_records_servicing_model(self) -> None:
         with mock.patch.dict(os.environ, {"RUNNER_TEMP": self._tmpdir()}, clear=False):
             result = run_hermes(
