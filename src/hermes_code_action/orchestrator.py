@@ -40,6 +40,8 @@ _PRIOR_STAGE_LIMIT = 8_000
 _STAGE_COMMENT_SUMMARY_LIMIT = 700
 _CLAUDE_THROTTLE_MARKERS = (
     "rate limit",
+    "hit your limit",
+    "usage limit",
     "rate_limit",
     "rate limited",
     "too many requests",
