@@ -155,6 +155,19 @@ class StageInputsTests(unittest.TestCase):
         self.assertEqual(fallback.hermes_model, "deepseek-ai/DeepSeek-V4-Pro")
         self.assertEqual(fallback.hermes_args, "")
 
+    def test_fallback_inputs_use_hermes_default_when_secondary_model_not_set(self) -> None:
+        base = Inputs(
+            hermes_provider="openai-codex",
+            hermes_model="primary",
+            hermes_args="-s claude-code",
+        )
+        fallback = _fallback_stage_inputs(base, base)
+        self.assertIsNotNone(fallback)
+        assert fallback is not None
+        self.assertEqual(fallback.hermes_provider, "")
+        self.assertEqual(fallback.hermes_model, "")
+        self.assertEqual(fallback.hermes_args, "")
+
     def test_claude_throttle_detection(self) -> None:
         self.assertTrue(_looks_like_claude_throttle(_failure_result(stderr="Claude Code API rate limit 429")))
         self.assertFalse(_looks_like_claude_throttle(_failure_result(stderr="unit tests failed")))
@@ -288,6 +301,46 @@ class RunStagedTests(unittest.TestCase):
         self.assertIn("fallback implement done", final.stdout)
         self.assertIn("openrouter / deepseek-ai/DeepSeek-V4-Pro", final.stdout)
         self.assertEqual(fallback_events, [("openrouter", "deepseek-ai/DeepSeek-V4-Pro", True, "Claude Code CLI", "sonnet")])
+
+    def test_retries_successful_claude_rate_limit_blocker_with_hermes_default_model(self) -> None:
+        policy = OrchestrationPolicy(stages=[StagePolicy(name="planner", mode="plan")])
+        side_effects = [
+            _success_result("Claude Code CLI failed: rate limit 429. Per instructions I am blocked."),
+            _success_result("fallback plan done"),
+        ]
+        inputs = Inputs(
+            dry_run=True,
+            hermes_args="-s claude-code",
+        )
+        fallback_events: list[tuple[str, str, bool, str, str]] = []
+
+        def on_stage_complete(stage: StagePolicy, result: HermesResult, completed: list[tuple[str, HermesResult]]) -> None:
+            fallback_events.append((
+                result.provider,
+                result.model,
+                result.fallback_used,
+                result.primary_provider,
+                result.primary_model,
+            ))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": tmp}, clear=False):
+                with mock.patch("hermes_code_action.orchestrator.run_hermes", side_effect=side_effects) as mocked:
+                    final = run_staged("base prompt", inputs, policy, on_stage_complete=on_stage_complete)
+
+        self.assertEqual(mocked.call_count, 2)
+        fallback_prompt = mocked.call_args_list[1].args[0]
+        fallback_inputs = mocked.call_args_list[1].args[1]
+        self.assertIn("Claude Code CLI was throttled/rate-limited", fallback_prompt)
+        self.assertIn("Hermes's configured default model", fallback_prompt)
+        self.assertEqual(fallback_inputs.hermes_provider, "")
+        self.assertEqual(fallback_inputs.hermes_model, "")
+        self.assertEqual(fallback_inputs.hermes_args, "")
+        self.assertTrue(final.success)
+        self.assertIn("Retried with Hermes default model after Claude Code throttling", final.stdout)
+        self.assertIn("fallback plan done", final.stdout)
+        self.assertIn("Hermes configured default model (fallback after Claude throttling", final.stdout)
+        self.assertEqual(fallback_events, [("", "", True, "Claude Code CLI", "opus")])
 
     def test_review_stage_fails_if_it_changes_git_state(self) -> None:
         policy = OrchestrationPolicy(stages=[StagePolicy(name="reviewer", mode="review")])

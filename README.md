@@ -166,7 +166,7 @@ Global `hermes_args` are applied to every staged Hermes invocation. Stage `extra
 
 For issue or pull request triggers, Hermes sessions are titled from the GitHub entity using `issue #123: Title` or `pr #123: Title`. After each Hermes invocation completes, the action renames the exact `session_id` reported by Hermes, preserving any configured `--profile` so the correct session database is updated. Workflow-dispatch/agent-mode runs without an issue or PR title remain untitled unless Hermes auto-title generation names them.
 
-When a staged phase that normally delegates to Claude Code CLI fails with output that looks like Claude/Anthropic throttling (`rate limit`, `429`, `too many requests`, `overloaded`, etc.), the action can retry that phase once with a secondary Hermes model. Configure `hermes_fallback_provider` and/or `hermes_fallback_model`; fallback retries intentionally do not load `hermes_args: -s claude-code` unless you explicitly set `hermes_fallback_args`.
+When a staged phase that normally delegates to Claude Code CLI returns output that looks like Claude/Anthropic throttling (`rate limit`, `429`, `too many requests`, `overloaded`, etc.), the action retries that phase once with Hermes's configured default model and explicitly labels the retry as a Claude-rate-limit fallback. Configure `hermes_fallback_provider` and/or `hermes_fallback_model` only when you want a specific secondary provider/model instead of the Hermes default. Fallback retries intentionally do not load `hermes_args: -s claude-code` unless you explicitly set `hermes_fallback_args`.
 
 For the Opus → Sonnet → GPT → Sonnet pattern: put Opus on `planner`, Sonnet on `implementer`, GPT on `reviewer`, and Sonnet on `adjudicator` with `must_consider: [reviewer]`. The adjudicator prompt requires triaging GPT's findings; the wrapper validates tests/branch rules and humans still approve merges.
 
@@ -194,8 +194,8 @@ Use an explicit prompt when you do not want mention detection:
 | `hermes_toolsets` | `file,terminal,web` | Toolsets passed to `hermes chat`. |
 | `hermes_model` | empty | Optional model override. |
 | `hermes_provider` | empty | Optional provider override. |
-| `hermes_fallback_model` | empty | Secondary Hermes model for staged-phase retries when Claude Code CLI appears throttled. |
-| `hermes_fallback_provider` | empty | Secondary Hermes provider for fallback retries. |
+| `hermes_fallback_model` | empty | Optional secondary Hermes model for staged-phase retries when Claude Code CLI appears throttled. Empty uses Hermes's configured default model. |
+| `hermes_fallback_provider` | empty | Optional secondary Hermes provider for fallback retries. Empty uses Hermes's configured default provider. |
 | `hermes_fallback_args` | empty | Optional args for fallback retries. Leave empty to avoid loading `claude-code` on fallback. |
 | `hermes_yolo` | `true` | Passes `--yolo` for non-interactive CI execution. Use only with trusted triggers. |
 | `orchestration_mode` | `single` | Set to `staged` for planner/implementer/reviewer/adjudicator runs. |
